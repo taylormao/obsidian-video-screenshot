@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         视频截图笔记助手 - Obsidian（诊断版）
+// @name         视频截图笔记助手 - Obsidian（改进版）
 // @namespace    https://github.com/taylormao/video-screenshot-obsidian
-// @version      2.0.2-debug
-// @description  一键截图视频画面并保存到 Obsidian 笔记（诊断版本：输出详细调试日志）
+// @version      2.0.2
+// @description  一键截图视频画面并保存到 Obsidian 笔记（YAML frontmatter + 智能文件追踪）
 // @author       taylormao
 // @license      MIT
 // @match        *://*/*
@@ -19,7 +19,7 @@
     'use strict';
 
     // 调试日志开关
-    const DEBUG = true;
+    const DEBUG = false;
     function log(...args) { if (DEBUG) console.log('[截图笔记 DBG]', ...args); }
     function logWarn(...args) { if (DEBUG) console.warn('[截图笔记 DBG]', ...args); }
 
@@ -28,7 +28,7 @@
     // ============================================================
 
     const SCRIPT_PREFIX = 'vso-';
-    const SCRIPT_VERSION = '2.0.2-debug';
+    const SCRIPT_VERSION = '2.0.2';
 
     const CONFIG_KEYS = {
         API_URL: 'obsidian_api_url',
@@ -318,7 +318,8 @@
                 }
 
                 const mdFiles = entries.filter(e => {
-                    const name = (e.name || e.path || '').toLowerCase();
+                    const raw = (typeof e === 'string') ? e : (e.name || e.path || '');
+                    const name = raw.toLowerCase();
                     return name.endsWith('.md');
                 });
                 log('findNoteBySourceURL: 过滤后.md文件数:', mdFiles.length);
@@ -327,7 +328,7 @@
                 log('findNoteBySourceURL: 将检查', checkFiles.length, '个文件');
 
                 for (const f of checkFiles) {
-                    const name = f.name || f.path || '';
+                    const name = (typeof f === 'string') ? f : (f.name || f.path || '');
                     const filePath = folderName + '/' + name;
                     log('findNoteBySourceURL: 正在检查文件:', filePath);
                     try {
