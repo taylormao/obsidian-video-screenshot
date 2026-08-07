@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         截图笔记助手 - Obsidian（模板版）
 // @namespace    https://github.com/taylormao/video-screenshot-obsidian
-// @version      3.0.2
+// @version      3.0.3
 // @description  多模板笔记助手：视频笔记 / 读书笔记 / 资源笔记，支持 Obsidian 自定义模板
 // @author       taylormao
 // @license      MIT
@@ -23,7 +23,7 @@
     // ============================================================
 
     const SCRIPT_PREFIX = 'sno-';
-    const SCRIPT_VERSION = '3.0.0';
+    const SCRIPT_VERSION = '3.0.3';
 
     const CONFIG_KEYS = {
         API_URL: 'obsidian_api_url',
@@ -557,7 +557,7 @@
     function getFrontmatterValue(content, key) {
         const match = content.match(/^---\s*\n([\s\S]*?)\n---/);
         if (!match) return null;
-        const km = match[1].match(new RegExp('^' + key + ':\\s*(.+)$', 'm'));
+        const km = match[1].match(new RegExp('^' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':\\s*(.+)$', 'm'));
         if (!km) return null;
         let val = km[1].trim();
         if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
@@ -570,7 +570,7 @@
         const match = content.match(/^---\s*\n([\s\S]*?)\n---/);
         if (!match) return content;
         const fm = match[1];
-        const keyRegex = new RegExp('^' + key + ':.*$', 'm');
+        const keyRegex = new RegExp('^' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':.*$', 'm');
         if (fm.match(keyRegex)) {
             return content.replace(fm, fm.replace(keyRegex, key + ': ' + value));
         }
