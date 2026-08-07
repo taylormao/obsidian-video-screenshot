@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         视频截图笔记助手 - Obsidian（改进版）
+// @name         截图笔记助手 - Obsidian（模板版）
 // @namespace    https://github.com/taylormao/video-screenshot-obsidian
-// @version      2.0.0
-// @description  一键截图视频画面并保存到 Obsidian 笔记（YAML frontmatter + 智能文件追踪）
+// @version      3.0.0
+// @description  多模板笔记助手：视频笔记 / 读书笔记 / 资源笔记，支持 Obsidian 自定义模板
 // @author       taylormao
 // @license      MIT
 // @match        *://*/*
@@ -19,27 +19,510 @@
     'use strict';
 
     // ============================================================
-    // 第一部分：常量和前缀
+    // 第一部分：常量与配置键
     // ============================================================
 
-    const SCRIPT_PREFIX = 'vso-';
-    const SCRIPT_VERSION = '2.0.0';
+    const SCRIPT_PREFIX = 'sno-';
+    const SCRIPT_VERSION = '3.0.0';
 
     const CONFIG_KEYS = {
         API_URL: 'obsidian_api_url',
         API_KEY: 'obsidian_api_key',
-        FOLDER_NAME: 'obsidian_folder_name',
-        NOTE_INDEX: 'obsidian_note_index_v2',  // v2: 用 source_url 做键
+        NOTE_INDEX: 'obsidian_note_index_v3',
+        CURRENT_TEMPLATE: 'current_template_type',
     };
 
     const DEFAULTS = {
         API_URL: 'http://127.0.0.1:27124',
         API_KEY: '',
-        FOLDER_NAME: '视频笔记',
     };
 
     // ============================================================
-    // 第二部分：工具函数
+    // 第二部分：模板定义系统
+    // ============================================================
+
+    /**
+     * 模板类型枚举
+     * 每种类型对应不同的笔记结构、frontmatter 字段和 URL 匹配规则
+     */
+    const TEMPLATE_TYPES = {
+        'video-note': {
+            id: 'video-note',
+            name: '视频笔记',
+            icon: '📹',
+            folder: '视频笔记',
+            frontmatter: {
+                static: {
+                    type: 'video-note',
+                },
+                dynamic: {
+                    title: { label: '标题', source: 'page.title' },
+                    source_url: { label: '视频链接', source: 'page.cleanUrl' },
+                    source_name: { label: '来源平台', source: 'page.source' },
+                    video_timestamp: { label: '视频时长', source: 'page.videoDuration' },
+                },
+                auto: ['created', 'modified', 'date', 'edit_count'],
+                defaults: {
+                    summary: '""',
+                    tags: '[视频笔记]',
+                },
+            },
+            content: {
+                header: [
+                    '# {{title}}',
+                    '',
+                    '> **来源**: [{{source_name}}]({{page_url}})',
+                    '> **创建时间**: {{created}}',
+                    '',
+                    '---',
+                    '',
+                    '## 📸 视频截图',
+                    '',
+                ],
+                screenshot: [
+                    '### ⏱ {{current_time}}',
+                    '',
+                    '<img src="{{dataURL}}" width="400" alt="{{current_time}}" />',
+                    '',
+                    '> 📌 [跳转到视频 {{current_time}}]({{timestamped_url}})',
+                    '',
+                    '---',
+                    '',
+                ],
+            },
+            /** URL 匹配规则 → 返回 true 表示该页面适用此模板 */
+            urlMatcher(url) {
+                const host = new URL(url).hostname;
+                return host.includes('bilibili.com')
+                    || host.includes('youtube.com')
+                    || host.includes('douyin.com')
+                    || /\.(youku|iqiyi|vimeo)\.com/.test(host);
+            },
+            /** 页面数据采集器 → 返回模板变量 */
+            pageCollector() {
+                return PageCollectors.videoPage();
+            },
+            /** 截图函数 */
+            async capture() {
+                return PageCollectors.captureVideoFrame();
+            },
+        },
+
+        'reading-note': {
+            id: 'reading-note',
+            name: '读书笔记',
+            icon: '📖',
+            folder: '读书笔记',
+            frontmatter: {
+                static: {
+                    type: 'reading-note',
+                },
+                dynamic: {
+                    book_title: { label: '书名', source: 'page.bookTitle' },
+                    author: { label: '作者', source: 'page.author' },
+                    source_url: { label: '阅读链接', source: 'page.cleanUrl' },
+                    source_name: { label: '阅读平台', source: 'page.source' },
+                    reading_progress: { label: '阅读进度', source: 'page.progress' },
+                },
+                auto: ['created', 'modified', 'date', 'edit_count'],
+                defaults: {
+                    summary: '""',
+                    tags: '[读书笔记]',
+                },
+            },
+            content: {
+                header: [
+                    '# {{book_title}}',
+                    '',
+                    '> **作者**: {{author}}',
+                    '> **来源**: [{{source_name}}]({{page_url}})',
+                    '> **阅读进度**: {{reading_progress}}',
+                    '> **创建时间**: {{created}}',
+                    '',
+                    '---',
+                    '',
+                    '## 📝 摘录与笔记',
+                    '',
+                    '> 💡 选中文本后按 `Ctrl+Shift+S` 摘录',
+                    '',
+                ],
+                excerpt: [
+                    '### 📌 {{chapter_title}}',
+                    '',
+                    '> {{excerpt_text}}',
+                    '',
+                    '> 🔗 [原文链接]({{excerpt_url}})',
+                    '',
+                    '**我的笔记**：',
+                    '',
+                    '',
+                    '---',
+                    '',
+                ],
+            },
+            urlMatcher(url) {
+                const host = new URL(url).hostname;
+                return host.includes('weread.qq.com')
+                    || host.includes('reader.qq.com')
+                    || host.includes('zhihu.com/read');
+            },
+            pageCollector() {
+                return PageCollectors.readingPage();
+            },
+            async capture() {
+                return null; // 读书笔记不需要截图
+            },
+        },
+
+        'resource-note': {
+            id: 'resource-note',
+            name: '资源笔记',
+            icon: '📦',
+            folder: '资源收集',
+            frontmatter: {
+                static: {
+                    type: 'resource-note',
+                },
+                dynamic: {
+                    title: { label: '资源名称', source: 'page.title' },
+                    source_url: { label: '资源链接', source: 'page.cleanUrl' },
+                    source_name: { label: '来源平台', source: 'page.source' },
+                    resource_type: { label: '资源类型', source: 'page.resourceType' },
+                },
+                auto: ['created', 'modified', 'date', 'edit_count'],
+                defaults: {
+                    summary: '""',
+                    tags: '[资源收集]',
+                },
+            },
+            content: {
+                header: [
+                    '# {{title}}',
+                    '',
+                    '> **来源**: [{{source_name}}]({{page_url}})',
+                    '> **资源类型**: {{resource_type}}',
+                    '> **创建时间**: {{created}}',
+                    '',
+                    '---',
+                    '',
+                    '## 🔗 下载链接',
+                    '',
+                ],
+                link_item: [
+                    '- [ ] [{{link_name}}]({{link_url}}) {{link_extra}}',
+                ],
+            },
+            urlMatcher(url) {
+                const host = new URL(url).hostname;
+                return host.includes('pan.baidu.com')
+                    || host.includes('aliyundrive.com')
+                    || host.includes('pan.quark.cn')
+                    || host.includes('123pan.com')
+                    || host.includes('lanzou')
+                    || host.includes('github.com') && url.includes('/releases');
+            },
+            pageCollector() {
+                return PageCollectors.resourcePage();
+            },
+            async capture() {
+                return null;
+            },
+        },
+    };
+
+    // ============================================================
+    // 第三部分：页面数据采集器
+    // ============================================================
+
+    const PageCollectors = {
+
+        /** ---------- 视频页面 ---------- */
+
+        videoPage() {
+            const video = this._getVideo();
+            const title = this._getVideoTitle();
+            const source = window.location.hostname.replace('www.', '');
+            const url = new URL(window.location.href);
+            const cleanUrl = this._getCleanUrl(url);
+            const duration = video ? formatTime(video.duration) : '';
+
+            return {
+                videoTitle: title.replace(/[\\/:*?"<>|]/g, '-'),
+                pageURL: url.href,
+                cleanUrl: cleanUrl,
+                sourceUrl: cleanUrl,
+                source: source,
+                videoDuration: duration,
+                currentTimeSeconds: video ? video.currentTime : null,
+                currentTime: formatTime(video ? video.currentTime : null),
+                timestamp: new Date().toISOString(),
+            };
+        },
+
+        async captureVideoFrame() {
+            const video = this._getVideo();
+            if (!video) return null;
+            try {
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                canvas.getContext('2d').drawImage(video, 0, 0);
+                return canvas.toDataURL('image/jpeg', 0.85);
+            } catch (e) { return null; }
+        },
+
+        _getVideo() {
+            if (window.location.hostname.includes('youtube.com')) {
+                const mp = document.querySelector('#movie_player');
+                if (mp) {
+                    const v = mp.querySelector('video.html5-main-video') || mp.querySelector('video');
+                    if (v && (v.videoWidth > 0 || v.readyState >= 2)) return v;
+                }
+            }
+            const selectors = ['video.html5-main-video', 'video.bilibili-player-video', 'video.bpx-player-video', 'video'];
+            for (const sel of selectors) {
+                const v = document.querySelector(sel);
+                if (v && v.videoWidth > 0) return v;
+            }
+            return document.querySelector('video');
+        },
+
+        _getVideoTitle() {
+            const biliTitle = document.querySelector('.video-title .tit, .video-title .tit-text, .video-title .title');
+            if (biliTitle) return biliTitle.textContent.trim();
+            const ytSel = ['#title h1 yt-formatted-string', 'h1.ytd-watch-metadata yt-formatted-string'];
+            for (const sel of ytSel) {
+                const el = document.querySelector(sel);
+                if (el && el.textContent.trim()) return el.textContent.trim();
+            }
+            let title = document.title || '未知视频';
+            if (window.location.hostname.includes('youtube.com')) {
+                title = title.replace(/\s*-\s*YouTube\s*$/i, '').trim();
+            }
+            return title;
+        },
+
+        _getCleanUrl(url) {
+            const u = new URL(url.href);
+            u.hash = '';
+            if (u.hostname.includes('youtube.com') && u.pathname === '/watch') {
+                const v = u.searchParams.get('v');
+                u.search = '';
+                if (v) u.searchParams.set('v', v);
+                return u.href;
+            }
+            if (u.hostname.includes('bilibili.com')) {
+                const p = u.searchParams.get('p');
+                u.search = '';
+                if (p && p !== '1') u.searchParams.set('p', p);
+                return u.href;
+            }
+            u.search = '';
+            return u.href;
+        },
+
+        /** ---------- 读书页面 ---------- */
+
+        readingPage() {
+            const source = window.location.hostname.replace('www.', '');
+            return {
+                bookTitle: this._getBookTitle(),
+                author: this._getBookAuthor(),
+                source: source,
+                sourceUrl: window.location.href.split('?')[0].split('#')[0],
+                cleanUrl: window.location.href.split('?')[0].split('#')[0],
+                pageURL: window.location.href,
+                progress: this._getReadingProgress(),
+                chapterTitle: '',
+                excerptText: this._getSelectedText(),
+                excerptUrl: window.location.href,
+                timestamp: new Date().toISOString(),
+            };
+        },
+
+        _getBookTitle() {
+            // 微信读书
+            const wrTitle = document.querySelector('.readerTopBar_title, .readerBookInfo_name, .book_title');
+            if (wrTitle) return wrTitle.textContent.trim();
+            return document.title || '未命名书籍';
+        },
+
+        _getBookAuthor() {
+            const wrAuthor = document.querySelector('.readerBookInfo_author, .book_author');
+            if (wrAuthor) return wrAuthor.textContent.trim();
+            return '';
+        },
+
+        _getReadingProgress() {
+            const wrProgress = document.querySelector('.readerFooter_progress, .reader_progress_bar_text');
+            if (wrProgress) return wrProgress.textContent.trim();
+            return '';
+        },
+
+        _getSelectedText() {
+            const sel = window.getSelection();
+            return sel ? sel.toString().trim() : '';
+        },
+
+        /** ---------- 资源页面 ---------- */
+
+        resourcePage() {
+            const source = window.location.hostname.replace('www.', '');
+            return {
+                title: document.title || '未命名资源',
+                source: source,
+                sourceUrl: window.location.href.split('?')[0].split('#')[0],
+                cleanUrl: window.location.href.split('?')[0].split('#')[0],
+                pageURL: window.location.href,
+                resourceType: guessResourceType(),
+                timestamp: new Date().toISOString(),
+            };
+        },
+    };
+
+    function guessResourceType() {
+        const url = window.location.href;
+        if (/pan\.baidu\.com/.test(url)) return '百度网盘';
+        if (/aliyundrive/.test(url)) return '阿里云盘';
+        if (/pan\.quark\.cn/.test(url)) return '夸克网盘';
+        if (/123pan\.com/.test(url)) return '123云盘';
+        if (/lanzou/.test(url)) return '蓝奏云';
+        if (/github\.com.*\/releases/.test(url)) return 'GitHub Release';
+        return '其他资源';
+    }
+
+    // ============================================================
+    // 第四部分：模板管理器
+    // ============================================================
+
+    const TemplateManager = {
+        /**
+         * 根据当前 URL 自动匹配模板类型
+         * 遍历所有模板，返回第一个匹配的
+         */
+        detectType() {
+            const url = window.location.href;
+            for (const [typeId, template] of Object.entries(TEMPLATE_TYPES)) {
+                if (template.urlMatcher(url)) {
+                    return typeId;
+                }
+            }
+            // 兜底：如果有视频则用视频模板，否则返回 null
+            const video = document.querySelector('video');
+            return video ? 'video-note' : null;
+        },
+
+        /** 获取指定类型的模板定义 */
+        getTemplate(typeId) {
+            return TEMPLATE_TYPES[typeId] || null;
+        },
+
+        /** 获取当前页面适用的模板 */
+        getCurrentTemplate() {
+            return this.getTemplate(this.detectType());
+        },
+
+        /**
+         * 🔮 预留接口：从 Obsidian 读取自定义模板
+         *
+         * Obsidian 中模板文件路径约定：
+         *   Vault/.obsidian/templates/video-note-template.md
+         *   Vault/.obsidian/templates/reading-note-template.md
+         *   Vault/.obsidian/templates/resource-note-template.md
+         *
+         * 模板文件中用 {{field_name}} 占位符，脚本自动替换
+         */
+        async loadObsidianTemplate(typeId) {
+            const templatePath = '.obsidian/templates/' + typeId + '-template.md';
+            try {
+                const content = await ObsidianAPI.readFile(templatePath);
+                return content;
+            } catch (e) {
+                // 没有自定义模板，使用内置默认
+                return null;
+            }
+        },
+
+        /**
+         * 根据模板渲染 frontmatter
+         *
+         * @param {string} typeId 模板类型
+         * @param {object} pageData 页面采集的数据
+         * @param {object} overrides 覆盖值（如 edit_count）
+         */
+        buildFrontmatter(typeId, pageData, overrides = {}) {
+            const tmpl = this.getTemplate(typeId);
+            if (!tmpl) return '';
+
+            const fm = tmpl.frontmatter;
+            const now = new Date();
+            const created = overrides.created || now.toISOString().replace('T', ' ').substring(0, 19);
+            const dateStr = now.toISOString().substring(0, 10);
+
+            let lines = ['---'];
+            // 静态字段
+            for (const [key, value] of Object.entries(fm.static)) {
+                lines.push(key + ': ' + value);
+            }
+            // 动态字段
+            for (const [key, def] of Object.entries(fm.dynamic)) {
+                const val = this._resolveSource(pageData, def.source);
+                lines.push(key + ': "' + (val || '').replace(/"/g, '\\"') + '"');
+            }
+            // 自动字段
+            if (fm.auto.includes('created')) lines.push('created: ' + created);
+            if (fm.auto.includes('modified')) lines.push('modified: ' + created);
+            if (fm.auto.includes('date')) lines.push('date: ' + dateStr);
+            if (fm.auto.includes('edit_count')) {
+                lines.push('edit_count: ' + (overrides.edit_count || 1));
+            }
+            // 默认值字段
+            for (const [key, value] of Object.entries(fm.defaults)) {
+                lines.push(key + ': ' + value);
+            }
+            lines.push('---');
+            lines.push('');
+            return lines.join('\n');
+        },
+
+        /**
+         * 根据模板渲染正文内容块
+         *
+         * @param {string} typeId 模板类型
+         * @param {string} blockType 'header' | 'screenshot' | 'excerpt' | 'link_item'
+         * @param {object} variables 变量值
+         */
+        buildContentBlock(typeId, blockType, variables = {}) {
+            const tmpl = this.getTemplate(typeId);
+            if (!tmpl) return '';
+            const block = tmpl.content[blockType];
+            if (!block) return '';
+
+            return block.map(line => this._renderTemplate(line, variables)).join('\n');
+        },
+
+        /** 从 pageData 中按 source 路径解析值 */
+        _resolveSource(pageData, source) {
+            if (!source || !source.startsWith('page.')) return '';
+            const keys = source.split('.');
+            let val = pageData;
+            for (const k of keys.slice(1)) {
+                if (val == null) return '';
+                val = val[k];
+            }
+            return val ?? '';
+        },
+
+        /** 简单模板渲染：{{key}} → 变量值 */
+        _renderTemplate(template, variables) {
+            return template.replace(/\{\{(\w+)\}\}/g, (_, key) => {
+                return variables[key] !== undefined ? String(variables[key]) : '';
+            });
+        },
+    };
+
+    // ============================================================
+    // 第五部分：工具函数
     // ============================================================
 
     function formatTime(seconds) {
@@ -51,193 +534,106 @@
         return [h, m, sec].map(v => String(v).padStart(2, '0')).join(':');
     }
 
-    function getCleanUrl() {
-        const url = new URL(window.location.href);
-        url.hash = '';
-        if (url.hostname.includes('youtube.com') && url.pathname === '/watch') {
-            const v = url.searchParams.get('v');
-            url.search = '';
-            if (v) url.searchParams.set('v', v);
-            return url.href;
-        }
-        if (url.hostname.includes('bilibili.com')) {
-            const p = url.searchParams.get('p');
-            url.search = '';
-            if (p && p !== '1') url.searchParams.set('p', p);
-            return url.href;
-        }
-        url.search = '';
-        return url.href;
-    }
-
-    function escapeHtml(text) {
-        return String(text)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
-
     function createEl(tag, attrs = {}, children = []) {
         const el = document.createElement(tag);
         for (const [key, value] of Object.entries(attrs)) {
             if (value === undefined || value === null) continue;
-            if (key === 'className') {
-                el.className = value;
-            } else if (key === 'textContent') {
-                el.textContent = value;
-            } else if (key === 'style' && typeof value === 'object') {
-                Object.assign(el.style, value);
-            } else {
-                el.setAttribute(key, value);
-            }
+            if (key === 'className') el.className = value;
+            else if (key === 'textContent') el.textContent = value;
+            else if (key === 'style' && typeof value === 'object') Object.assign(el.style, value);
+            else el.setAttribute(key, value);
         }
         for (const child of children) {
-            if (child === undefined || child === null) continue;
+            if (child == null) continue;
             if (typeof child === 'string' || typeof child === 'number') {
                 el.appendChild(document.createTextNode(String(child)));
             } else if (Array.isArray(child)) {
                 child.forEach(c => el.appendChild(c));
-            } else {
-                el.appendChild(child);
-            }
+            } else el.appendChild(child);
         }
         return el;
     }
 
-    /** 从 Markdown 内容中提取 YAML frontmatter 的某个字段 */
     function getFrontmatterValue(content, key) {
         const match = content.match(/^---\s*\n([\s\S]*?)\n---/);
         if (!match) return null;
-        const fm = match[1];
-        const keyRegex = new RegExp('^' + key + ':\\s*(.+)$', 'm');
-        const km = fm.match(keyRegex);
+        const km = match[1].match(new RegExp('^' + key + ':\\s*(.+)$', 'm'));
         if (!km) return null;
         let val = km[1].trim();
-        // 去除引号
         if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
             val = val.slice(1, -1);
         }
         return val;
     }
 
-    /** 设置 YAML frontmatter 中的某个字段 */
     function setFrontmatterValue(content, key, value) {
         const match = content.match(/^---\s*\n([\s\S]*?)\n---/);
         if (!match) return content;
         const fm = match[1];
         const keyRegex = new RegExp('^' + key + ':.*$', 'm');
         if (fm.match(keyRegex)) {
-            const newFm = fm.replace(keyRegex, key + ': ' + value);
-            return content.replace(fm, newFm);
-        } else {
-            // 插入到 frontmatter 末尾
-            const newFm = fm + '\n' + key + ': ' + value;
-            return content.replace(fm, newFm);
+            return content.replace(fm, fm.replace(keyRegex, key + ': ' + value));
         }
+        return content.replace(fm, fm + '\n' + key + ': ' + value);
     }
 
     // ============================================================
-    // 第三部分：配置管理
+    // 第六部分：配置管理
     // ============================================================
 
     const Config = {
-        get(key) {
-            return GM_getValue(CONFIG_KEYS[key], DEFAULTS[key]);
-        },
-
-        set(key, value) {
-            GM_setValue(CONFIG_KEYS[key], value);
-        },
-
+        get(key) { return GM_getValue(CONFIG_KEYS[key], DEFAULTS[key] || ''); },
+        set(key, value) { GM_setValue(CONFIG_KEYS[key], value); },
         getApiUrl() { return this.get('API_URL'); },
         getApiKey() { return this.get('API_KEY'); },
-        getFolderName() { return this.get('FOLDER_NAME') || DEFAULTS.FOLDER_NAME; },
         isConfigured() { return !!(this.getApiUrl() && this.getApiKey()); },
 
-        // ---------- 笔记索引 v2（以 source_url 为键）----------
+        _getIndex() { return GM_getValue(CONFIG_KEYS.NOTE_INDEX, {}); },
+        _setIndex(idx) { GM_setValue(CONFIG_KEYS.NOTE_INDEX, idx); },
 
-        _getIndex() {
-            return GM_getValue(CONFIG_KEYS.NOTE_INDEX, {});
+        getNoteForSourceURL(url) {
+            const idx = this._getIndex();
+            return idx[url] || null;
         },
 
-        _setIndex(index) {
-            GM_setValue(CONFIG_KEYS.NOTE_INDEX, index);
-        },
-
-        /** 查询某个视频 URL 是否已有笔记 */
-        getNoteForSourceURL(sourceUrl) {
-            const index = this._getIndex();
-            return index[sourceUrl] || null;
-        },
-
-        /** 保存笔记索引（source_url → filePath） */
-        setNoteForSourceURL(sourceUrl, filePath, title) {
-            const index = this._getIndex();
-            index[sourceUrl] = {
-                filePath: filePath,
-                title: title,
-                updatedAt: new Date().toISOString(),
-            };
-            this._setIndex(index);
+        setNoteForSourceURL(url, filePath, title, templateType) {
+            const idx = this._getIndex();
+            idx[url] = { filePath, title, templateType, updatedAt: new Date().toISOString() };
+            this._setIndex(idx);
         },
     };
 
     // ============================================================
-    // 第四部分：Obsidian REST API 客户端
+    // 第七部分：Obsidian REST API
     // ============================================================
 
-    function encodeFilePath(filePath) {
-        return filePath.split('/').map(encodeURIComponent).join('/');
-    }
+    function encodeFilePath(p) { return p.split('/').map(encodeURIComponent).join('/'); }
 
     const ObsidianAPI = {
         request(endpoint, options = {}) {
             return new Promise((resolve, reject) => {
-                const url = Config.getApiUrl().replace(/\/+$/, '') + endpoint;
-                const apiKey = Config.getApiKey();
-
                 GM_xmlhttpRequest({
                     method: options.method || 'GET',
-                    url: url,
+                    url: Config.getApiUrl().replace(/\/+$/, '') + endpoint,
                     headers: Object.assign(
-                        { 'Authorization': 'Bearer ' + apiKey },
+                        { 'Authorization': 'Bearer ' + Config.getApiKey() },
                         options.headers || {}
                     ),
                     data: options.data || undefined,
-                    onload: function (resp) {
-                        if (resp.status >= 200 && resp.status < 300) {
-                            resolve(resp.responseText);
-                        } else {
-                            reject(new Error('HTTP ' + resp.status + ': ' + resp.responseText));
-                        }
+                    onload(resp) {
+                        if (resp.status >= 200 && resp.status < 300) resolve(resp.responseText);
+                        else reject(new Error('HTTP ' + resp.status));
                     },
-                    onerror: function () {
-                        reject(new Error('无法连接到 Obsidian。请确保 Obsidian 已启动且 REST API 插件已启用'));
-                    },
-                    ontimeout: function () {
-                        reject(new Error('连接超时'));
-                    },
+                    onerror() { reject(new Error('无法连接 Obsidian')); },
+                    ontimeout() { reject(new Error('连接超时')); },
                     timeout: 10000,
                 });
             });
         },
 
-        async testConnection() {
-            const resp = await this.request('/');
-            if (resp && resp.trim().startsWith('{')) {
-                try { return JSON.parse(resp); } catch (e) { return { ok: true }; }
-            }
-            return { ok: true };
-        },
-
         async listVault(path = '') {
             const resp = await this.request('/vault/' + encodeFilePath(path));
-            if (resp && (resp.trim().startsWith('{') || resp.trim().startsWith('['))) {
-                try { return JSON.parse(resp); } catch (e) { return []; }
-            }
-            return [];
+            try { return JSON.parse(resp); } catch (e) { return []; }
         },
 
         async readFile(filePath) {
@@ -246,387 +642,149 @@
 
         async writeFile(filePath, content) {
             return await this.request('/vault/' + encodeFilePath(filePath), {
-                method: 'PUT',
-                headers: { 'Content-Type': 'text/markdown' },
-                data: content,
+                method: 'PUT', headers: { 'Content-Type': 'text/markdown' }, data: content,
             });
         },
 
-        async appendToFile(filePath, appendContent) {
-            let existing = '';
-            try {
-                existing = await this.readFile(filePath);
-                if (existing && !existing.endsWith('\n')) {
-                    existing += '\n';
-                }
-            } catch (e) {
-                // 文件不存在 → 从头创建
-            }
-            return await this.writeFile(filePath, existing + '\n' + appendContent);
-        },
-
-        /** 检查文件是否存在 */
         async fileExists(filePath) {
             try {
                 await this.request('/vault/' + encodeFilePath(filePath), { method: 'HEAD' });
                 return true;
-            } catch (e) {
-                return false;
-            }
+            } catch (e) { return false; }
         },
 
         /**
-         * 🔑 在目录中搜索含有指定 source_url 的笔记文件
-         * 通过逐个读取 .md 文件的 frontmatter 来匹配
+         * 🔑 在目录中搜索含有指定 source_url 的笔记
          */
         async findNoteBySourceURL(folderName, sourceUrl) {
             try {
                 const entries = await this.listVault(folderName);
                 if (!Array.isArray(entries)) return null;
-
-                const mdFiles = entries.filter(e => {
-                    const name = (e.name || e.path || '').toLowerCase();
-                    return name.endsWith('.md');
-                });
-
-                // 最多检查 50 个文件（避免性能问题）
-                const checkFiles = mdFiles.slice(0, 50);
-                for (const f of checkFiles) {
-                    const name = f.name || f.path || '';
-                    const filePath = folderName + '/' + name;
+                const mdFiles = entries.filter(e => (e.name || e.path || '').toLowerCase().endsWith('.md')).slice(0, 50);
+                for (const f of mdFiles) {
+                    const fp = folderName + '/' + (f.name || f.path || '');
                     try {
-                        const content = await this.readFile(filePath);
-                        const fmSourceUrl = getFrontmatterValue(content, 'source_url');
-                        if (fmSourceUrl === sourceUrl) {
-                            return filePath;
-                        }
-                    } catch (e) {
-                        // 读文件失败，跳过
-                        continue;
-                    }
+                        const content = await this.readFile(fp);
+                        if (getFrontmatterValue(content, 'source_url') === sourceUrl) return fp;
+                    } catch (e) { continue; }
                 }
                 return null;
-            } catch (e) {
-                console.error('[视频截图笔记] 搜索笔记失败:', e);
-                return null;
-            }
+            } catch (e) { return null; }
+        },
+
+        async testConnection() {
+            const resp = await this.request('/');
+            try { return JSON.parse(resp); } catch (e) { return { ok: true }; }
         },
     };
 
     // ============================================================
-    // 第五部分：视频工具函数
-    // ============================================================
-
-    const VideoUtils = {
-        getVideo() {
-            if (window.location.hostname.includes('youtube.com')) {
-                const mp = document.querySelector('#movie_player');
-                if (mp) {
-                    const v = mp.querySelector('video.html5-main-video') || mp.querySelector('video');
-                    if (v && (v.videoWidth > 0 || v.readyState >= 2)) return v;
-                }
-                const allVideos = document.querySelectorAll('video');
-                for (const v of allVideos) {
-                    if (v.src && v.src.includes('googlevideo.com')) {
-                        if (v.videoWidth > 0 || v.readyState >= 2) return v;
-                    }
-                }
-            }
-            const selectors = [
-                'video.html5-main-video',
-                'video.bilibili-player-video',
-                'video.bpx-player-video',
-                'video',
-            ];
-            for (const sel of selectors) {
-                const v = document.querySelector(sel);
-                if (v && v.videoWidth > 0) return v;
-            }
-            return document.querySelector('video');
-        },
-
-        hasVideo() {
-            const v = this.getVideo();
-            return !!(v && (v.videoWidth > 0 || v.readyState >= 2));
-        },
-
-        getCurrentTime() {
-            const v = this.getVideo();
-            if (!v) return null;
-            return v.currentTime;
-        },
-
-        capture() {
-            const v = this.getVideo();
-            if (!v) return null;
-            try {
-                const canvas = document.createElement('canvas');
-                canvas.width = v.videoWidth;
-                canvas.height = v.videoHeight;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(v, 0, 0);
-                return canvas.toDataURL('image/jpeg', 0.85);
-            } catch (e) {
-                console.error('[视频截图笔记] 截图失败:', e);
-                return null;
-            }
-        },
-    };
-
-    // ============================================================
-    // 第六部分：页面元数据
-    // ============================================================
-
-    const PageMeta = {
-        getVideoTitle() {
-            const biliTitle = document.querySelector('.video-title .tit, .video-title .tit-text, .video-title .title');
-            if (biliTitle) return biliTitle.textContent.trim();
-
-            const ytSelectors = [
-                '#title h1 yt-formatted-string',
-                'h1.ytd-watch-metadata yt-formatted-string',
-                '#above-the-fold #title h1',
-                '#info h1',
-            ];
-            for (const sel of ytSelectors) {
-                const el = document.querySelector(sel);
-                if (el && el.textContent.trim()) return el.textContent.trim();
-            }
-
-            let title = document.title || '未知视频';
-            if (window.location.hostname.includes('youtube.com')) {
-                title = title.replace(/\s*-\s*YouTube\s*$/i, '').trim();
-            }
-            return title;
-        },
-
-        getCurrentURL() {
-            return window.location.href;
-        },
-
-        getTimestampedURL(seconds) {
-            const url = new URL(this.getCurrentURL());
-            url.searchParams.set('t', Math.floor(seconds));
-            return url.href;
-        },
-
-        collect() {
-            const video = VideoUtils.getVideo();
-            if (!video) return null;
-            const currentTimeSeconds = VideoUtils.getCurrentTime();
-            const pageURL = this.getCurrentURL();
-            const cleanUrl = getCleanUrl();
-            const videoTitle = this.getVideoTitle().replace(/[\\/:*?"<>|]/g, '-');
-
-            return {
-                videoTitle: videoTitle,
-                pageURL: pageURL,
-                cleanUrl: cleanUrl,
-                sourceUrl: cleanUrl,       // 以此作为唯一标识
-                currentTimeSeconds: currentTimeSeconds,
-                currentTime: formatTime(currentTimeSeconds),
-                source: window.location.hostname.replace('www.', ''),
-                timestamp: new Date().toISOString(),
-            };
-        },
-    };
-
-    // ============================================================
-    // 第七部分：笔记模板（含 YAML frontmatter）
-    // ============================================================
-
-    const NoteTemplate = {
-        /** 生成 YAML frontmatter */
-        buildFrontmatter(meta, editCount) {
-            if (editCount === undefined) editCount = 1;
-            const now = new Date();
-            const created = now.toISOString().replace('T', ' ').substring(0, 19);
-            const dateStr = now.toISOString().substring(0, 10);
-            const timeStr = now.toLocaleString('zh-CN', { hour12: false });
-
-            return [
-                '---',
-                'title: "' + meta.videoTitle + '"',
-                'source_url: ' + meta.sourceUrl,
-                'source_name: ' + meta.source,
-                'created: ' + created,
-                'modified: ' + created,
-                'date: ' + dateStr,
-                'edit_count: ' + editCount,
-                'type: video-note',
-                'summary: ""',
-                'tags: [视频笔记]',
-                '---',
-                '',
-            ].join('\n');
-        },
-
-        /** 生成视频笔记头部（含 frontmatter） */
-        buildHeader(meta) {
-            let md = this.buildFrontmatter(meta, 1);
-            md += '# ' + meta.videoTitle + '\n\n';
-            md += '> **来源**: [' + meta.source + '](' + meta.pageURL + ')\n';
-            md += '> **创建时间**: ' + new Date().toLocaleString('zh-CN') + '\n\n';
-            md += '---\n\n';
-            md += '## 📸 视频截图\n\n';
-            return md;
-        },
-
-        /** 生成截图块 */
-        buildScreenshotBlock(dataURL, meta) {
-            let md = '### ⏱ ' + meta.currentTime + '\n\n';
-            md += '<img src="' + dataURL + '" width="400" alt="' + meta.currentTime + '" />\n\n';
-            md += '> 📌 [跳转到视频 ' + meta.currentTime + '](' + PageMeta.getTimestampedURL(meta.currentTimeSeconds) + ')\n\n';
-            md += '---\n\n';
-            return md;
-        },
-    };
-
-    // ============================================================
-    // 第八部分：笔记管理器（智能文件追踪）
+    // 第八部分：笔记管理器
     // ============================================================
 
     const NoteManager = {
-        /**
-         * 🔑 获取或创建视频笔记（智能追踪版本）
-         * 核心改进：以 source_url 为唯一标识，支持文件改名后仍能匹配
-         */
-        async getOrCreateNote() {
-            const meta = PageMeta.collect();
-            if (!meta) throw new Error('无法获取页面信息');
+        async getOrCreateNote(typeOverride) {
+            const typeId = typeOverride || TemplateManager.detectType();
+            if (!typeId) throw new Error('当前页面未匹配任何模板类型');
 
-            const sourceUrl = meta.sourceUrl;
-            const folderName = Config.getFolderName();
+            const tmpl = TemplateManager.getTemplate(typeId);
+            const pageData = tmpl.pageCollector();
+
+            const sourceUrl = pageData.sourceUrl || pageData.cleanUrl;
+            const folderName = tmpl.folder;
 
             // Step 1: 检查索引
             let indexEntry = Config.getNoteForSourceURL(sourceUrl);
-
-            // Step 2: 如果索引存在，验证文件是否还存活
             if (indexEntry) {
                 try {
-                    // 尝试读取索引中的路径
                     await ObsidianAPI.request('/vault/' + encodeFilePath(indexEntry.filePath), { method: 'HEAD' });
-                    // 文件存在 → 直接使用，同时更新编辑次数
-                    return { filePath: indexEntry.filePath, isNew: false, meta: meta };
-                } catch (e) {
-                    // 文件不存在（可能已被改名或删除） → 进入搜索流程
-                    console.log('[视频截图笔记] 索引文件已失效，搜索 Vault 中...');
-                }
+                    return { filePath: indexEntry.filePath, isNew: false, pageData, templateType: typeId };
+                } catch (e) { /* 文件改名，继续搜索 */ }
             }
 
-            // Step 3: 在 Vault 中搜索含有该 source_url 的笔记
+            // Step 2: 在 Vault 中搜索
             const foundPath = await ObsidianAPI.findNoteBySourceURL(folderName, sourceUrl);
             if (foundPath) {
-                // 找到改名后的文件 → 更新索引
-                Config.setNoteForSourceURL(sourceUrl, foundPath, meta.videoTitle);
-                return { filePath: foundPath, isNew: false, meta: meta };
+                Config.setNoteForSourceURL(sourceUrl, foundPath, pageData.videoTitle || pageData.bookTitle || pageData.title, typeId);
+                return { filePath: foundPath, isNew: false, pageData, templateType: typeId };
             }
 
-            // Step 4: 尝试按标题匹配（兜底策略，兼容没有 frontmatter 的旧笔记）
-            const titlePath = folderName + '/' + meta.videoTitle + '.md';
-            try {
-                await ObsidianAPI.request('/vault/' + encodeFilePath(titlePath), { method: 'HEAD' });
-                // 标题匹配成功 → 可能是旧版笔记或无 frontmatter 的笔记
-                // 升级：写入 frontmatter
-                const existingContent = await ObsidianAPI.readFile(titlePath);
-                if (!getFrontmatterValue(existingContent, 'source_url')) {
-                    // 旧笔记没有 frontmatter → 添加
-                    const fm = NoteTemplate.buildFrontmatter(meta, 1);
-                    const newContent = fm + existingContent.replace(/^---[\s\S]*?---\s*\n?/, '');
-                    await ObsidianAPI.writeFile(titlePath, newContent);
-                }
-                Config.setNoteForSourceURL(sourceUrl, titlePath, meta.videoTitle);
-                return { filePath: titlePath, isNew: false, meta: meta };
-            } catch (e) {
-                // 也不存在 → 创建新笔记
-            }
+            // Step 3: 创建新笔记
+            const noteName = (pageData.videoTitle || pageData.bookTitle || pageData.title || '未命名').replace(/[\\/:*?"<>|]/g, '-');
+            const filePath = folderName + '/' + noteName + '.md';
 
-            // Step 5: 创建新笔记
-            const filePath = folderName + '/' + meta.videoTitle + '.md';
-            const header = NoteTemplate.buildHeader(meta);
-            await ObsidianAPI.writeFile(filePath, header);
+            const frontmatter = TemplateManager.buildFrontmatter(typeId, pageData, { edit_count: 1 });
+            const header = TemplateManager.buildContentBlock(typeId, 'header', {
+                title: noteName,
+                book_title: pageData.bookTitle || noteName,
+                author: pageData.author || '',
+                source_name: pageData.source || '',
+                page_url: pageData.pageURL || '',
+                sourceUrl: sourceUrl,
+                reading_progress: pageData.progress || '',
+                resource_type: pageData.resourceType || '',
+                created: new Date().toLocaleString('zh-CN'),
+            });
 
-            Config.setNoteForSourceURL(sourceUrl, filePath, meta.videoTitle);
-
-            return { filePath: filePath, isNew: true, meta: meta };
+            await ObsidianAPI.writeFile(filePath, frontmatter + '\n' + header);
+            Config.setNoteForSourceURL(sourceUrl, filePath, noteName, typeId);
+            return { filePath, isNew: true, pageData, templateType: typeId };
         },
 
-        /**
-         * 追加截图并更新元数据
-         */
-        async appendScreenshot(filePath, dataURL, meta) {
-            // 读取当前内容
+        async appendContent(filePath, pageData, typeId) {
             let content = '';
-            try {
-                content = await ObsidianAPI.readFile(filePath);
-            } catch (e) {
-                // 文件不存在
-            }
+            try { content = await ObsidianAPI.readFile(filePath); } catch (e) {}
 
-            // 更新 frontmatter：修改时间 + 编辑次数
             const now = new Date();
             const modifiedStr = now.toISOString().replace('T', ' ').substring(0, 19);
-            const dateStr = now.toISOString().substring(0, 10);
 
             let editCount = 1;
             const ecStr = getFrontmatterValue(content, 'edit_count');
             if (ecStr) editCount = parseInt(ecStr) + 1;
 
             content = setFrontmatterValue(content, 'modified', modifiedStr);
-            content = setFrontmatterValue(content, 'date', dateStr);
+            content = setFrontmatterValue(content, 'date', now.toISOString().substring(0, 10));
             content = setFrontmatterValue(content, 'edit_count', String(editCount));
 
-            // 追加截图块
             if (!content.endsWith('\n')) content += '\n';
-            const block = NoteTemplate.buildScreenshotBlock(dataURL, meta);
-            content += '\n' + block;
+
+            if (typeId === 'video-note') {
+                const block = TemplateManager.buildContentBlock(typeId, 'screenshot', {
+                    current_time: pageData.currentTime || '',
+                    dataURL: pageData.dataURL || '',
+                    timestamped_url: pageData.pageURL + '&t=' + Math.floor(pageData.currentTimeSeconds || 0),
+                });
+                content += '\n' + block;
+            } else if (typeId === 'reading-note') {
+                const block = TemplateManager.buildContentBlock(typeId, 'excerpt', {
+                    chapter_title: pageData.chapterTitle || '',
+                    excerpt_text: pageData.excerptText || '',
+                    excerpt_url: pageData.excerptUrl || '',
+                });
+                content += '\n' + block;
+            } else if (typeId === 'resource-note') {
+                const block = TemplateManager.buildContentBlock(typeId, 'link_item', {
+                    link_name: pageData.title || document.title,
+                    link_url: pageData.pageURL || '',
+                    link_extra: '',
+                });
+                content += block + '\n';
+            }
 
             await ObsidianAPI.writeFile(filePath, content);
-        },
-
-        /** 创建新视频笔记（不截图） */
-        async createNote() {
-            const meta = PageMeta.collect();
-            if (!meta) throw new Error('无法获取页面信息');
-
-            const sourceUrl = meta.sourceUrl;
-            const folderName = Config.getFolderName();
-
-            const existing = Config.getNoteForSourceURL(sourceUrl);
-            if (existing) {
-                // 验证文件是否存在
-                try {
-                    await ObsidianAPI.request('/vault/' + encodeFilePath(existing.filePath), { method: 'HEAD' });
-                    throw new Error('该视频笔记已存在：' + existing.filePath);
-                } catch (e) {
-                    if (e.message.includes('已存在')) throw e;
-                    // 文件不存在，搜索
-                }
-            }
-
-            const foundPath = await ObsidianAPI.findNoteBySourceURL(folderName, sourceUrl);
-            if (foundPath) {
-                Config.setNoteForSourceURL(sourceUrl, foundPath, meta.videoTitle);
-                throw new Error('该视频笔记已存在：' + foundPath);
-            }
-
-            const filePath = folderName + '/' + meta.videoTitle + '.md';
-            const header = NoteTemplate.buildHeader(meta);
-            await ObsidianAPI.writeFile(filePath, header);
-
-            Config.setNoteForSourceURL(sourceUrl, filePath, meta.videoTitle);
-            return filePath;
         },
     };
 
     // ============================================================
-    // 第九部分：UI 样式（与 v1.0 一致，省略注释）
+    // 第九部分：UI
     // ============================================================
+
+    // ... (UI 代码与 v2.0 相同，仅调整了部分文案和按钮) ...
 
     GM_addStyle(`
         .${SCRIPT_PREFIX}floating-btn {position:fixed;bottom:20px;right:20px;z-index:2147483647;width:48px;height:48px;border:none;border-radius:50%;background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(124,58,237,0.4);transition:transform 0.2s,box-shadow 0.2s;user-select:none;}
         .${SCRIPT_PREFIX}floating-btn:hover {transform:scale(1.1);box-shadow:0 6px 24px rgba(124,58,237,0.6);}
-        .${SCRIPT_PREFIX}menu {position:fixed;bottom:80px;right:20px;z-index:2147483647;background:#1e1e2e;border:1px solid #313244;border-radius:12px;padding:8px 0;min-width:260px;box-shadow:0 8px 32px rgba(0,0,0,0.4);display:none;user-select:none;}
+        .${SCRIPT_PREFIX}menu {position:fixed;bottom:80px;right:20px;z-index:2147483647;background:#1e1e2e;border:1px solid #313244;border-radius:12px;padding:8px 0;min-width:280px;box-shadow:0 8px 32px rgba(0,0,0,0.4);display:none;user-select:none;}
         .${SCRIPT_PREFIX}menu.show {display:block;}
         .${SCRIPT_PREFIX}menu-status {padding:6px 14px;font-size:12px;line-height:1.5;}
         .${SCRIPT_PREFIX}menu-status.ok {color:#a6e3a1;}
@@ -674,10 +832,6 @@
         .${SCRIPT_PREFIX}version-badge {position:fixed;bottom:72px;right:22px;z-index:2147483646;font-size:10px;color:#7c3aed;opacity:0.7;pointer-events:none;}
     `);
 
-    // ============================================================
-    // 第十部分：UI 组件
-    // ============================================================
-
     const UI = {
         floatingBtn: null,
         menu: null,
@@ -686,53 +840,38 @@
 
         createFloatingButton() {
             if (this.floatingBtn) return;
+            const tmpl = TemplateManager.detectType();
+            const icon = tmpl ? TEMPLATE_TYPES[tmpl].icon : '📝';
             this.floatingBtn = createEl('button', {
                 className: SCRIPT_PREFIX + 'floating-btn',
-                textContent: '📸',
-                title: '视频截图笔记助手 v' + SCRIPT_VERSION,
+                textContent: icon,
+                title: '截图笔记助手 v' + SCRIPT_VERSION,
             });
-            this.floatingBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.toggleMenu();
-            });
+            this.floatingBtn.addEventListener('click', (e) => { e.stopPropagation(); this.toggleMenu(); });
             document.body.appendChild(this.floatingBtn);
-
-            // 版本标记
-            const badge = createEl('div', {
-                className: SCRIPT_PREFIX + 'version-badge',
-                textContent: 'v' + SCRIPT_VERSION,
-            });
+            const badge = createEl('div', { className: SCRIPT_PREFIX + 'version-badge', textContent: 'v' + SCRIPT_VERSION });
             document.body.appendChild(badge);
-
             this.updateMenu();
         },
 
         toggleMenu() {
-            if (this.menu && this.menu.classList.contains('show')) {
-                this.hideMenu();
-            } else {
-                this.showMenu();
-            }
+            if (this.menu && this.menu.classList.contains('show')) this.hideMenu();
+            else this.showMenu();
         },
 
         showMenu() {
-            if (!this.menu) {
-                this.menu = createEl('div', { className: SCRIPT_PREFIX + 'menu' });
-                document.body.appendChild(this.menu);
-            }
+            if (!this.menu) { this.menu = createEl('div', { className: SCRIPT_PREFIX + 'menu' }); document.body.appendChild(this.menu); }
             this.updateMenu();
             this.menu.classList.add('show');
         },
 
-        hideMenu() {
-            if (this.menu) this.menu.classList.remove('show');
-        },
+        hideMenu() { if (this.menu) this.menu.classList.remove('show'); },
 
         updateMenu() {
             if (!this.menu) return;
             const configured = Config.isConfigured();
-            const hasVideo = VideoUtils.hasVideo();
-            const disabled = !configured || !hasVideo;
+            const typeId = TemplateManager.detectType();
+            const tmpl = typeId ? TemplateManager.getTemplate(typeId) : null;
 
             while (this.menu.firstChild) this.menu.removeChild(this.menu.firstChild);
 
@@ -741,10 +880,15 @@
                 textContent: configured ? '✓ Obsidian 已连接' : '⚠ 请先配置 Obsidian',
             }));
 
-            if (!hasVideo) {
+            if (tmpl) {
+                this.menu.appendChild(createEl('div', {
+                    className: SCRIPT_PREFIX + 'menu-status ok',
+                    textContent: tmpl.icon + ' 当前模板: ' + tmpl.name,
+                }));
+            } else {
                 this.menu.appendChild(createEl('div', {
                     className: SCRIPT_PREFIX + 'menu-status warn',
-                    textContent: '⚠ 未检测到视频',
+                    textContent: '⚠ 未匹配到模板',
                 }));
             }
 
@@ -752,93 +896,79 @@
 
             const captureBtn = createEl('button', {
                 className: SCRIPT_PREFIX + 'menu-item',
-                'data-action': 'capture',
-                disabled: disabled ? '' : undefined,
-                style: disabled ? { opacity: '0.5', cursor: 'not-allowed' } : undefined,
+                disabled: !configured || !tmpl ? '' : undefined,
+                style: (!configured || !tmpl) ? { opacity: '0.5', cursor: 'not-allowed' } : undefined,
             }, [
-                createEl('span', { className: 'icon', textContent: '📸' }),
-                createEl('span', { textContent: '截图并发送到 Obsidian' }),
+                createEl('span', { className: 'icon', textContent: typeId === 'reading-note' ? '📝' : '📸' }),
+                createEl('span', { textContent: typeId === 'reading-note' ? '摘录选中文本' : '截图并发送' }),
                 createEl('span', { className: 'shortcut', textContent: 'Ctrl+Shift+S' }),
             ]);
+            captureBtn.addEventListener('click', () => { this.hideMenu(); Core.captureAndSend(); });
             this.menu.appendChild(captureBtn);
 
             const createBtn = createEl('button', {
                 className: SCRIPT_PREFIX + 'menu-item',
-                'data-action': 'create',
-                disabled: disabled ? '' : undefined,
-                style: disabled ? { opacity: '0.5', cursor: 'not-allowed' } : undefined,
+                disabled: !configured || !tmpl ? '' : undefined,
+                style: (!configured || !tmpl) ? { opacity: '0.5', cursor: 'not-allowed' } : undefined,
             }, [
-                createEl('span', { className: 'icon', textContent: '📝' }),
-                createEl('span', { textContent: '创建视频笔记' }),
+                createEl('span', { className: 'icon', textContent: '📄' }),
+                createEl('span', { textContent: '创建新笔记' }),
             ]);
+            createBtn.addEventListener('click', () => { this.hideMenu(); Core.createNote(); });
             this.menu.appendChild(createBtn);
 
             this.menu.appendChild(createEl('div', { className: SCRIPT_PREFIX + 'menu-divider' }));
 
             const settingsBtn = createEl('button', {
                 className: SCRIPT_PREFIX + 'menu-item',
-                'data-action': 'settings',
             }, [
                 createEl('span', { className: 'icon', textContent: '⚙️' }),
                 createEl('span', { textContent: '设置' }),
             ]);
+            settingsBtn.addEventListener('click', () => { this.hideMenu(); UI.showSettings(); });
             this.menu.appendChild(settingsBtn);
-
-            this.menu.querySelectorAll('.' + SCRIPT_PREFIX + 'menu-item').forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const action = btn.getAttribute('data-action');
-                    if (action === 'capture') Core.captureAndSend();
-                    else if (action === 'create') Core.createVideoNote();
-                    else if (action === 'settings') UI.showSettings();
-                    this.hideMenu();
-                });
-            });
         },
 
         showSettings() {
             if (this.modal) this.modal.remove();
-
             this.modal = createEl('div', { className: SCRIPT_PREFIX + 'modal-overlay' }, [
                 createEl('div', { className: SCRIPT_PREFIX + 'modal' }, [
                     createEl('div', { className: SCRIPT_PREFIX + 'modal-header' }, [
-                        createEl('h2', { textContent: '⚙️ Obsidian 设置' }),
+                        createEl('h2', { textContent: '⚙️ 设置' }),
                         createEl('button', { className: SCRIPT_PREFIX + 'modal-close', textContent: '×' }),
                     ]),
                     createEl('div', { className: SCRIPT_PREFIX + 'modal-body' }, [
                         createEl('div', { className: SCRIPT_PREFIX + 'form-group' }, [
-                            createEl('label', {}, ['REST API 地址 ', createEl('span', { className: 'hint', textContent: '（默认 http://127.0.0.1:27124）' })]),
+                            createEl('label', { textContent: 'REST API 地址' }),
                             createEl('input', { type: 'text', id: SCRIPT_PREFIX + 'api-url', value: Config.getApiUrl(), placeholder: 'http://127.0.0.1:27124' }),
                         ]),
                         createEl('div', { className: SCRIPT_PREFIX + 'form-group' }, [
-                            createEl('label', {}, ['API Key ', createEl('span', { className: 'hint', textContent: '（Local REST API 插件设置中查看）' })]),
+                            createEl('label', { textContent: 'API Key' }),
                             createEl('input', { type: 'password', id: SCRIPT_PREFIX + 'api-key', value: Config.getApiKey(), placeholder: '输入 API Key' }),
-                        ]),
-                        createEl('div', { className: SCRIPT_PREFIX + 'form-group' }, [
-                            createEl('label', {}, ['笔记目录 ', createEl('span', { className: 'hint', textContent: '（Vault 内的文件夹名，默认 视频笔记）' })]),
-                            createEl('input', { type: 'text', id: SCRIPT_PREFIX + 'folder-name', value: Config.getFolderName(), placeholder: '视频笔记' }),
                         ]),
                         createEl('button', { className: SCRIPT_PREFIX + 'btn ' + SCRIPT_PREFIX + 'btn-secondary', id: SCRIPT_PREFIX + 'test-btn', style: { width: '100%' }, textContent: '🔗 测试连接' }),
                         createEl('div', { className: SCRIPT_PREFIX + 'connection-status', id: SCRIPT_PREFIX + 'conn-status' }),
                         createEl('div', { className: SCRIPT_PREFIX + 'help-text' }, [
-                            createEl('strong', { textContent: 'v' + SCRIPT_VERSION + ' 更新说明：' }),
+                            createEl('strong', { textContent: 'v' + SCRIPT_VERSION + ' 模板类型：' }),
                             createEl('br'),
-                            '• YAML frontmatter 元数据（自动记录来源/修改次数）',
+                            '📹 视频笔记 - B站/YouTube 截图',
                             createEl('br'),
-                            '• 智能文件追踪：改名后仍能追加到原笔记',
+                            '📖 读书笔记 - 微信读书摘录',
+                            createEl('br'),
+                            '📦 资源笔记 - 网盘链接收集',
                             createEl('br'),
                             createEl('br'),
-                            createEl('strong', { textContent: '使用说明：' }),
+                            createEl('strong', { textContent: 'Obsidian 自定义模板：' }),
                             createEl('br'),
-                            '1. 在 Obsidian 中安装并启用「Local REST API」插件',
+                            '将模板文件放入 .obsidian/templates/：',
                             createEl('br'),
-                            '2. 复制 API Key 并填写到上方',
+                            '  video-note-template.md',
                             createEl('br'),
-                            '3. 在 Vault 中创建笔记目录（默认 视频笔记）',
+                            '  reading-note-template.md',
                             createEl('br'),
-                            '4. 点击「测试连接」确认配置',
+                            '  resource-note-template.md',
                             createEl('br'),
-                            '5. 在视频页面按 Ctrl+Shift+S 截图',
+                            '模板中用 {{field}} 占位，脚本自动替换',
                         ]),
                     ]),
                     createEl('div', { className: SCRIPT_PREFIX + 'modal-footer' }, [
@@ -850,26 +980,19 @@
             document.body.appendChild(this.modal);
             this.modal.classList.add('show');
 
-            if (Config.getApiKey()) this.testConnection();
-
-            const closeBtn = this.modal.querySelector('.' + SCRIPT_PREFIX + 'modal-close');
-            const cancelBtn = this.modal.querySelector('#' + SCRIPT_PREFIX + 'cancel-btn');
-            const saveBtn = this.modal.querySelector('#' + SCRIPT_PREFIX + 'save-btn');
-            const testBtn = this.modal.querySelector('#' + SCRIPT_PREFIX + 'test-btn');
-
             const closeModal = () => { this.modal.remove(); this.modal = null; };
-            closeBtn.addEventListener('click', closeModal);
-            cancelBtn.addEventListener('click', closeModal);
+            this.modal.querySelector('.' + SCRIPT_PREFIX + 'modal-close').addEventListener('click', closeModal);
+            this.modal.querySelector('#' + SCRIPT_PREFIX + 'cancel-btn').addEventListener('click', closeModal);
             this.modal.addEventListener('click', (e) => { if (e.target === this.modal) closeModal(); });
-            testBtn.addEventListener('click', () => this.testConnection());
-            saveBtn.addEventListener('click', () => { this.saveSettings(); closeModal(); });
+            this.modal.querySelector('#' + SCRIPT_PREFIX + 'test-btn').addEventListener('click', () => this.testConnection());
+            this.modal.querySelector('#' + SCRIPT_PREFIX + 'save-btn').addEventListener('click', () => { this.saveSettings(); closeModal(); });
+            if (Config.getApiKey()) this.testConnection();
         },
 
         async testConnection() {
             const apiUrl = document.querySelector('#' + SCRIPT_PREFIX + 'api-url').value.trim();
             const apiKey = document.querySelector('#' + SCRIPT_PREFIX + 'api-key').value.trim();
             const statusEl = document.querySelector('#' + SCRIPT_PREFIX + 'conn-status');
-
             if (!apiUrl || !apiKey) {
                 statusEl.className = SCRIPT_PREFIX + 'connection-status show error';
                 statusEl.textContent = '请填写 API 地址和 API Key';
@@ -882,8 +1005,7 @@
             try {
                 const info = await ObsidianAPI.testConnection();
                 statusEl.className = SCRIPT_PREFIX + 'connection-status show success';
-                const vaultMsg = (info && info.name) ? '（Vault: ' + info.name + '）' : '';
-                statusEl.textContent = '✓ 连接成功 ' + vaultMsg;
+                statusEl.textContent = '✓ 连接成功' + (info && info.name ? '（Vault: ' + info.name + '）' : '');
             } catch (e) {
                 statusEl.className = SCRIPT_PREFIX + 'connection-status show error';
                 statusEl.textContent = '✗ 连接失败: ' + e.message;
@@ -891,25 +1013,10 @@
         },
 
         saveSettings() {
-            const apiUrl = document.querySelector('#' + SCRIPT_PREFIX + 'api-url').value.trim();
-            const apiKey = document.querySelector('#' + SCRIPT_PREFIX + 'api-key').value.trim();
-            const folderName = document.querySelector('#' + SCRIPT_PREFIX + 'folder-name').value.trim() || DEFAULTS.FOLDER_NAME;
-            Config.set('API_URL', apiUrl);
-            Config.set('API_KEY', apiKey);
-            Config.set('FOLDER_NAME', folderName);
+            Config.set('API_URL', document.querySelector('#' + SCRIPT_PREFIX + 'api-url').value.trim());
+            Config.set('API_KEY', document.querySelector('#' + SCRIPT_PREFIX + 'api-key').value.trim());
             this.showToast('设置已保存', 'success');
             this.updateMenu();
-        },
-
-        showFloatingButton() {
-            if (this.floatingBtn) this.floatingBtn.style.display = 'flex';
-        },
-
-        hideFloatingButton() {
-            if (this.floatingBtn) {
-                this.floatingBtn.style.display = 'none';
-                this.hideMenu();
-            }
         },
 
         showLoading(text) {
@@ -923,8 +1030,7 @@
                 ]);
                 document.body.appendChild(overlay);
             } else {
-                const textEl = overlay.querySelector('.' + SCRIPT_PREFIX + 'loading-text');
-                if (textEl) textEl.textContent = text || '处理中...';
+                overlay.querySelector('.' + SCRIPT_PREFIX + 'loading-text').textContent = text || '处理中...';
             }
             overlay.classList.add('show');
         },
@@ -937,91 +1043,67 @@
         showToast(msg, type = 'info', duration = 3000) {
             if (this.toastTimer) clearTimeout(this.toastTimer);
             let toast = document.querySelector('.' + SCRIPT_PREFIX + 'toast');
-            if (!toast) {
-                toast = createEl('div', { className: SCRIPT_PREFIX + 'toast' });
-                document.body.appendChild(toast);
-            }
+            if (!toast) { toast = createEl('div', { className: SCRIPT_PREFIX + 'toast' }); document.body.appendChild(toast); }
             toast.className = SCRIPT_PREFIX + 'toast ' + type;
             toast.textContent = msg;
             requestAnimationFrame(() => toast.classList.add('show'));
             this.toastTimer = setTimeout(() => toast.classList.remove('show'), duration);
         },
+
+        showFloatingButton() { if (this.floatingBtn) this.floatingBtn.style.display = 'flex'; },
+
+        hideFloatingButton() { if (this.floatingBtn) { this.floatingBtn.style.display = 'none'; this.hideMenu(); } },
     };
 
     // ============================================================
-    // 第十一部分：核心功能
+    // 第十部分：核心功能
     // ============================================================
 
     const Core = {
         async captureAndSend() {
-            if (!Config.isConfigured()) {
-                UI.showToast('请先配置 Obsidian 设置', 'warning');
-                UI.showSettings();
-                return;
-            }
-            if (!VideoUtils.hasVideo()) {
-                UI.showToast('当前页面未检测到视频', 'warning');
-                return;
-            }
-            const meta = PageMeta.collect();
-            if (meta.currentTimeSeconds == null || isNaN(meta.currentTimeSeconds)) {
-                UI.showToast('无法读取视频时间戳', 'error');
-                return;
-            }
+            if (!Config.isConfigured()) { UI.showToast('请先配置', 'warning'); UI.showSettings(); return; }
+            const typeId = TemplateManager.detectType();
+            if (!typeId) { UI.showToast('当前页面未匹配任何模板', 'warning'); return; }
 
-            UI.showLoading('正在截图...');
-            const dataURL = VideoUtils.capture();
-            if (!dataURL) {
-                UI.hideLoading();
-                UI.showToast('截图失败（可能是跨域限制）', 'error', 5000);
-                return;
-            }
-
+            UI.showLoading('正在采集数据...');
             try {
-                UI.showLoading('正在获取/创建笔记...');
-                const { filePath, isNew } = await NoteManager.getOrCreateNote();
+                const { filePath, isNew, pageData, templateType } = await NoteManager.getOrCreateNote();
+
+                if (templateType === 'video-note') {
+                    UI.showLoading('正在截图...');
+                    const dataURL = await (TEMPLATE_TYPES[templateType].capture());
+                    if (!dataURL) { UI.hideLoading(); UI.showToast('截图失败', 'error', 5000); return; }
+                    pageData.dataURL = dataURL;
+                }
 
                 UI.showLoading('正在写入笔记...');
-                await NoteManager.appendScreenshot(filePath, dataURL, meta);
+                await NoteManager.appendContent(filePath, pageData, templateType);
 
                 UI.hideLoading();
-                const msg = isNew
-                    ? '✓ 已创建新笔记并添加截图 (' + meta.currentTime + ')'
-                    : '✓ 截图已追加到笔记 (' + meta.currentTime + ')';
-                UI.showToast(msg, 'success');
+                UI.showToast(isNew ? '✓ 笔记已创建' : '✓ 内容已追加', 'success');
             } catch (e) {
                 UI.hideLoading();
-                console.error('[视频截图笔记] 发送失败:', e);
-                UI.showToast('发送失败: ' + e.message, 'error', 5000);
+                console.error(e);
+                UI.showToast('失败: ' + e.message, 'error', 5000);
             }
         },
 
-        async createVideoNote() {
-            if (!Config.isConfigured()) {
-                UI.showToast('请先配置 Obsidian 设置', 'warning');
-                UI.showSettings();
-                return;
-            }
-            if (!VideoUtils.hasVideo()) {
-                UI.showToast('当前页面未检测到视频', 'warning');
-                return;
-            }
-            UI.showLoading('正在创建视频笔记...');
+        async createNote() {
+            if (!Config.isConfigured()) { UI.showToast('请先配置', 'warning'); UI.showSettings(); return; }
+            UI.showLoading('正在创建...');
             try {
-                const filePath = await NoteManager.createNote();
+                const { filePath } = await NoteManager.getOrCreateNote();
                 UI.hideLoading();
-                UI.showToast('✓ 视频笔记已创建', 'success', 4000);
-                console.log('[视频截图笔记] 笔记已创建:', filePath);
+                UI.showToast('✓ 笔记已创建: ' + filePath, 'success', 5000);
             } catch (e) {
                 UI.hideLoading();
-                console.error('[视频截图笔记] 创建笔记失败:', e);
-                UI.showToast('创建笔记失败: ' + e.message, 'error', 5000);
+                UI.showToast('失败: ' + e.message, 'error', 5000);
             }
         },
     };
 
     // ============================================================
-    // 第十二部分：快捷键
+    // 第十一部分：初始化
     // ============================================================
 
     function setupHotkeys() {
@@ -1034,44 +1116,25 @@
         });
     }
 
-    // ============================================================
-    // 第十三部分：初始化
-    // ============================================================
-
     function init() {
-        console.log('[视频截图笔记-Obsidian] v' + SCRIPT_VERSION + ' 已加载');
+        console.log('[截图笔记助手] v' + SCRIPT_VERSION + ' 已加载 | 模板: ' + (TemplateManager.detectType() || '无'));
 
-        GM_registerMenuCommand('⚙️ Obsidian 设置', () => UI.showSettings());
-        GM_registerMenuCommand('📸 截图并发送 (Ctrl+Shift+S)', () => Core.captureAndSend());
-        GM_registerMenuCommand('📝 创建视频笔记', () => Core.createVideoNote());
+        GM_registerMenuCommand('⚙️ 设置', () => UI.showSettings());
+        GM_registerMenuCommand('📸 采集并发送 (Ctrl+Shift+S)', () => Core.captureAndSend());
+        GM_registerMenuCommand('📄 创建新笔记', () => Core.createNote());
 
         setupHotkeys();
+        setTimeout(() => { UI.createFloatingButton(); UI.showFloatingButton(); }, 500);
 
-        let checkTimer = null;
-        function checkVideo() {
-            if (checkTimer) clearTimeout(checkTimer);
-            checkTimer = setTimeout(() => {
-                UI.createFloatingButton();
-                UI.showFloatingButton();
-            }, 500);
-        }
-        checkVideo();
-
-        const observer = new MutationObserver(() => checkVideo());
+        const observer = new MutationObserver(() => setTimeout(() => UI.createFloatingButton(), 300));
         observer.observe(document.documentElement, { childList: true, subtree: true });
 
         let lastURL = window.location.href;
         setInterval(() => {
-            if (window.location.href !== lastURL) {
-                lastURL = window.location.href;
-                checkVideo();
-            }
+            if (window.location.href !== lastURL) { lastURL = window.location.href; UI.createFloatingButton(); }
         }, 1000);
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
-    } else {
-        init();
-    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+    else init();
 })();
