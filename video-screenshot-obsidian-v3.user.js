@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         截图笔记助手 - Obsidian（模板版）
 // @namespace    https://github.com/taylormao/video-screenshot-obsidian
-// @version      3.0.1
+// @version      3.0.2
 // @description  多模板笔记助手：视频笔记 / 读书笔记 / 资源笔记，支持 Obsidian 自定义模板
 // @author       taylormao
 // @license      MIT
@@ -677,9 +677,10 @@
             try {
                 const entries = await this.listVault(folderName);
                 if (!Array.isArray(entries)) return null;
-                const mdFiles = entries.filter(e => (e.name || e.path || '').toLowerCase().endsWith('.md')).slice(0, 50);
+                const getName = x => (typeof x === 'string') ? x : (x.name || x.path || '');
+                const mdFiles = entries.filter(e => getName(e).toLowerCase().endsWith('.md')).slice(0, 50);
                 for (const f of mdFiles) {
-                    const fp = folderName + '/' + (f.name || f.path || '');
+                    const fp = folderName + '/' + getName(f);
                     try {
                         const content = await this.readFile(fp);
                         if (getFrontmatterValue(content, 'source_url') === sourceUrl) return fp;
