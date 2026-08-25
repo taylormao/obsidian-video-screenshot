@@ -526,10 +526,13 @@
             return md;
         },
 
-        // 【修改点】：直接将生成的图片外链嵌入 Markdown，而不是 base64
+        // 【修改点】：使用 Obsidian 专用的 Markdown 图片语法代替 HTML 标签
         buildScreenshotBlock(imgUrl, meta) {
             let md = '### ⏱ ' + meta.currentTime + '\n\n';
-            md += '<img src="' + imgUrl + '" width="400" alt="' + meta.currentTime + '" />\n\n';
+            
+            // Obsidian 调整图片大小的语法为：![替代文本|宽度](图片链接)
+            md += '![' + meta.currentTime + '|400](' + imgUrl + ')\n\n';
+            
             md += '> 📌 [跳转到视频 ' + meta.currentTime + '](' + PageMeta.getTimestampedURL(meta.currentTimeSeconds) + ')\n\n';
             md += '---\n\n';
             return md;
