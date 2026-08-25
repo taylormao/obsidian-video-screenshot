@@ -1069,17 +1069,34 @@
 
         let checkTimer = null;
         function checkVideo() {
+            // 【核心修复】：如果按钮已经存在于页面上，直接返回，不再重置定时器
+            // 避免 B站/YouTube 页面元素频繁变动导致防抖定时器被无限推迟
+            if (UI.floatingBtn && document.body && document.body.contains(UI.floatingBtn)) {
+                return;
+            }
+
             if (checkTimer) clearTimeout(checkTimer);
             checkTimer = setTimeout(() => {
-                UI.createFloatingButton();
-                UI.showFloatingButton();
-            }, 500);
+                if (document.body) {
+                    UI.createFloatingButton();
+                    UI.showFloatingButton();
+                }
+            }, 100); // 将 500ms 缩短到 100ms
         }
-        checkVideo();
+        
+        // 1. 脚本加载时立刻尝试创建一次，不再干等
+        if (document.body) {
+            UI.createFloatingButton();
+            UI.showFloatingButton();
+        } else {
+            checkVideo();
+        }
 
+        // 2. 监听页面结构变化（主要用于单页面应用 SPA 跳转后的重新注入）
         const observer = new MutationObserver(() => checkVideo());
         observer.observe(document.documentElement, { childList: true, subtree: true });
 
+        // 3. 监听 URL 变化
         let lastURL = window.location.href;
         setInterval(() => {
             if (window.location.href !== lastURL) {
