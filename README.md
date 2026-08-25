@@ -1,5 +1,7 @@
 # 视频截图笔记助手 - Obsidian
 
+**请优先使用`视频截图笔记助手 - Obsidian v2.js这里面的脚本`**
+
 > v2.0.3 / v3.0.3 | 油猴脚本 | 一键截图视频画面并保存到 Obsidian 笔记
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
