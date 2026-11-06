@@ -1,0 +1,14 @@
+# 凭据备份 / Credentials Backup
+# 来源：Git 历史提交 c05de5d（2026-08-25 图床外链版脚本）中记录的明文配置
+# 生成日期：2026-11-07
+#
+# 安全提示：本文件含明文密钥。提交到公开 GitHub 仓库后任何人都能读取，
+#           请尽快在 Obsidian Local REST API 插件与图床后台轮换以下凭据。
+
+[Obsidian Local REST API]
+API_URL = http://127.0.0.1:27123
+API_TOKEN = fa57a6a5fe65618b3674fe4befe7f8c25f1f974e7928e436db503d8ce02d06a3
+
+[图床 / ImgBed]
+UPLOAD_URL = https://file.915577.xyz/upload?returnFormat=full
+BEARER_TOKEN = imgbed_0409b3df7ad38f2a5c901305fcdce3737c74e7fe48c5b721579c001f41d11bd0
