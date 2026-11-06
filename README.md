@@ -1,27 +1,27 @@
 # 视频截图笔记助手 - Obsidian
 
-> 主线 **v3.1.0** · 油猴脚本 · 多模板笔记 + 可选图床外链 + **任意网址视频捕获**
+> 主线 **v3.2.0** / 备用 **v2.3.0** · 油猴脚本 · 多模板笔记 + 可选图床外链 + **任意网址视频捕获**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-在任意网页观看视频时，一键截图并自动写入 Obsidian Vault，生成带时间戳和 YAML 元数据的 Markdown 笔记。脚本会穿透 Shadow DOM、iframe 播放器、延迟加载的播放器，自动挑出主播放器截图。
+在任意网页观看视频时，一键截图并自动写入 Obsidian Vault，生成带时间戳和 YAML 元数据的 Markdown 笔记。脚本会穿透 Shadow DOM、iframe 播放器、延迟加载的播放器，自动挑出主播放器截图；并以「完整 URL + 页面标题」双条件区分不同内容，避免截图串到同一篇笔记。
 
 ---
 
 ## 主分支与版本（2026-11-07 起）
 
-**`master` 已切换为 3.1.0 主线**：它现在包含仓库里的全部脚本，`v3.1.0` 是默认推荐安装的版本。`v3-template` 保留为 3.x 的开发/对照分支，日常使用请一律看 `master`。
+**`master` 是 3.x 主线**：它包含仓库里的全部脚本，**v3.2.0** 是默认推荐安装的版本。`v3-template` 保留为 3.x 的开发/对照分支，日常使用请一律看 `master`。
 
 | 分支 | 脚本文件 | 版本 | 定位 |
 |------|----------|------|------|
-| **`master`** | **`video-screenshot-obsidian-v3.user.js`** | **3.1.0** | **主推**：视频 / 读书 / 资源三模板 + 可选图床（默认关）+ 全站视频捕获 |
-| `master` | `video-screenshot-obsidian-v2.user.js` | 2.2.0 | 备用：仅视频截图，base64 内嵌，笔记目录可自定义 |
-| `master` | `视频截图笔记助手 - Obsidian v2 (图床外链版).js` | 2.2.0 | 备用：仅视频截图，始终走图床外链 |
+| **`master`** | **`video-screenshot-obsidian-v3.user.js`** | **3.2.0** | **主推**：视频 / 读书 / 资源三模板 + 可选图床（默认关）+ 全站视频捕获 + 双条件身份判定 |
+| `master` | `video-screenshot-obsidian-v2.user.js` | 2.3.0 | 备用：仅视频截图，base64 内嵌，笔记目录可自定义 |
+| `master` | `视频截图笔记助手 - Obsidian v2 (图床外链版).js` | 2.3.0 | 备用：仅视频截图，始终走图床外链 |
 | 两分支 | `video-screenshot-obsidian.user.js` | 历史快照 | **请勿安装**，仅保留作版本追溯 |
 
 安装入口（打开后点 **Raw** 由 Tampermonkey 接管）：
 
-- **3.1.0 主推**：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/video-screenshot-obsidian-v3.user.js>
+- **3.2.0 主推**：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/video-screenshot-obsidian-v3.user.js>
 - v2 标准版：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/video-screenshot-obsidian-v2.user.js>
 - v2 图床版：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/视频截图笔记助手%20-%20Obsidian%20v2%20(图床外链版).js>
 
@@ -39,12 +39,12 @@
 
 > 端口：脚本默认 `http://127.0.0.1:27123`（插件的 HTTP 端口）。若插件使用 HTTPS，通常是 `https://127.0.0.1:27124`，请在设置面板改成实际值。
 
-### 2. 脚本配置（以 3.1.0 为准）
+### 2. 脚本配置（以 3.2.0 为准）
 
 1. 打开任意视频网站，点击右下角浮动按钮 → ⚙️ 设置
 2. 填写 **REST API 地址**、**API Key**（v2 系列还需填笔记目录）
 3. 点击「测试连接」确认成功，再点「保存」
-4. 3.1.0 的笔记目录由模板固定：`视频笔记` / `读书笔记` / `资源收集`，暂不可自定义
+4. 3.2.0 的笔记目录由模板固定：`视频笔记` / `读书笔记` / `资源收集`，暂不可自定义
 
 ### 3. 使用
 
@@ -55,7 +55,7 @@
 
 ### 4. 图床（可选）
 
-- **3.1.0（主推）**：设置中把「截图存储方式」切到「上传图床，写入外链」，再填接口 URL / Token；**默认关闭**，不切就是 base64 内嵌
+- **3.2.0（主推）**：设置中把「截图存储方式」切到「上传图床，写入外链」，再填接口 URL / Token；**默认关闭**，不切就是 base64 内嵌
 - **v2 图床版**：始终上传，在设置中填「图床上传接口 URL」和「Bearer Token」（可选）
 - **v2 标准版**：不支持，截图内嵌为 base64
 
@@ -85,7 +85,7 @@
 5. **跨域 iframe 协作**：顶层找不到合格 video（或只有小视频）时，向所有 iframe `postMessage` 广播截图请求；iframe 内的脚本实例代截后回传画面与播放进度。**iframe 实例不注入 UI、不注册快捷键**。
 6. **跨域污染降级**：`toDataURL` 失败时，克隆一个 `crossOrigin="anonymous"` 的 video 重载同一 `currentSrc` 并 seek 到当前时间点再截图（对带 CORS 头的 CDN 有效）。
 7. **最终兜底**：仍拿不到画面时**不再整体失败**，笔记里写入 `> ⚠️ 未能捕获画面` 与时间戳，保证记录不丢。
-8. **链接修正**：回跳链接改用 `URL.searchParams.set('t', ...)`；`source_url` 保留 `v` / `bvid` / `aid` / `vid` / `cid` / `id` / `p` 等标识参数。
+8. **链接修正**：回跳链接改用 `URL.searchParams.set('t', ...)`；`source_url` 不再裁剪查询参数（3.2.0 / 2.3.0 起，详见下节）。
 
 > 若站点使用无 `<video>` 的纯 Canvas/WebGL 渲染，或 CDN 既不允许 CORS 又不暴露 video 元素，浏览器层面无法取帧，此时会走第 7 步的文字兜底。
 
@@ -95,8 +95,8 @@
 
 ```yaml
 ---
-title: "视频标题"
-source_url: https://www.bilibili.com/video/BV1xxx
+title: "示例视频标题 - 示例站点"
+source_url: "https://example.com/watch?viewkey=AAA&p=1"
 source_name: bilibili.com
 created: 2026-08-07 14:30:00
 modified: 2026-08-07 15:45:00
@@ -108,9 +108,34 @@ tags: [视频笔记]
 ---
 ```
 
-## 智能文件追踪
+> `title` 取当前页面 `<title>` 标签内容，`source_url` 取当前页面完整 URL（保留全部查询参数，仅去掉 `#` 锚点）。两者都参与笔记身份判定。
 
-笔记改名后旧版会重复建文件。v2/v3 均以 `source_url` 为唯一键维护索引，索引失效时遍历 Vault 目录搜索 frontmatter 中的 `source_url`，找到后更新索引并追加内容。
+## 笔记身份判定与文件追踪
+
+### 为什么要两个条件
+
+只按 URL 前缀归并，会把同路径下不同 `viewkey` / `id` 的页面塞进同一篇笔记；只按完整 URL 比对，又会让「同一视频仅多了 `utm_source` 之类跟踪参数」被拆成多篇。因此脚本用两个维度共同判定。
+
+### 判定规则
+
+| 场景 | 结果 |
+|------|------|
+| 归一 URL 相同、`title` 相同 | **复用同一篇笔记** |
+| 内容参数不同（如 `viewkey=AAA` 与 `viewkey=BBB`） | **新建笔记** |
+| 归一 URL 相同但 `title` 不同 | **新建笔记** |
+| 仅多 `utm_*` / `spm` / `from` / `t` 等跟踪或时间参数 | **复用同一篇笔记** |
+| 查询参数顺序不同 | **复用同一篇笔记** |
+
+- **`source_url`（写入 frontmatter）** = 当前页面完整 URL，保留全部查询参数，去掉 `#` 锚点。
+- **`title`（写入 frontmatter）** = 当前页面 `<title>` 内容，连续空白折叠为一个空格；YAML 写入时转义双引号与反斜杠，读回时还原，保证往返一致。
+- **归一 URL（仅用于比对）** = 从 `source_url` 剔除纯跟踪/时间参数（`utm_*`、`spm`、`scm`、`from`、`ref`、`share_*`、`vd_source`、`t`、`timestamp` 等），剩余参数按参数名与值排序。**内容参数一律保留**，无需站点白名单。
+- **身份键** = `归一 URL + 规范化 title`，用于脚本索引；索引失效时遍历 Vault 目录，读取每个 md 的 frontmatter 做同样比对，因此笔记改名后仍能找到。
+
+### 旧笔记与升级
+
+- 旧笔记若没有 `title` 字段，采用**保守回退**：只有完整 `source_url` 精确相等才复用，绝不因标题相同而合并。
+- 索引键升级为 `obsidian_note_index_v4`，旧索引自动失效；首次使用新版本会遍历一次 Vault 重建，属正常现象。
+- v2 原有的「按文件名/标题兜底复用」逻辑已移除——它与新规则冲突，会让不同 URL 但标题相同的页面被错误合并。
 
 ## v3 模板系统
 
@@ -128,6 +153,19 @@ tags: [视频笔记]
 
 ## 版本变更
 
+### 2026-11-07 —— 笔记身份判定修复（3.2.0 / 2.3.0）
+
+| 变更 | 说明 |
+|------|------|
+| 问题 | 旧版裁掉 URL 查询参数，同路径下仅 `viewkey` / `id` 不同的两个页面被算成同一 `source_url`，截图串到同一篇 md |
+| `source_url` | 改为写入**当前页面完整 URL**（保留全部查询参数，去掉 `#` 锚点） |
+| `title` | frontmatter 改为写入当前页面 `<title>` 内容，并用 YAML 双引号安全转义 |
+| 判定规则 | 索引与 Vault 遍历改用「归一 URL + 规范化 title」双条件，**两者都相同**才复用同一篇笔记 |
+| 归一 URL | 仅剔除纯跟踪/时间参数并对参数排序，内容参数（含 `viewkey`）全部保留 |
+| 移除兜底 | 删除 v2 的「按文件名/标题匹配复用」逻辑，避免标题相同导致误合并 |
+| 兼容与迁移 | 旧笔记缺 `title` 时只在完整 URL 精确相等才复用；索引键升级为 `obsidian_note_index_v4`，旧索引失效后由 Vault 遍历重建 |
+| 范围 | 三个脚本同步升级：3.2.0（主推）、两个 v2 脚本 2.3.0 |
+
 ### 2026-11-07 —— 主线切换与凭据归档
 
 | 变更 | 说明 |
@@ -136,7 +174,7 @@ tags: [视频笔记]
 | 安装链接 | 三条安装入口统一指向 `master`，主推 `video-screenshot-obsidian-v3.user.js` |
 | 凭据归档 | 新增 `store.txt`，汇总历史提交中记录过的图床接口 URL / Bearer Token 与 Obsidian API Token（**含明文，见下方安全提示**） |
 
-> 本次未改动任何脚本代码，3.1.0 的功能与 2026-11-06 一致。
+> 该次提交只做分支合并与凭据归档，未改动脚本代码。
 
 ### 2026-11-06 —— 合并与全站捕获
 
@@ -181,7 +219,8 @@ tags: [视频笔记]
 - [x] v3.0 — 多模板笔记系统
 - [x] v2.1 / v2.2 — 图床外链 + 全站视频捕获
 - [x] v3.1 — 合并两条线的能力，任意网址可用
-- [x] 2026-11-07 — 把 `master` 主分支切换到 3.1.0
+- [x] 2026-11-07 — 把 `master` 主分支切换到 3.x
+- [x] 2026-11-07 — 双条件笔记身份判定，修复不同查询参数被合并的问题
 - [ ] 把 `store.txt` 移出公开仓库（加入 `.gitignore`，仅本地保管）
 - [ ] 接线 `loadObsidianTemplate()`，让 `templates/*.md` 真正生效
 - [ ] 截图上传为 Obsidian 本地附件（REST API 二进制写入），替代外部图床

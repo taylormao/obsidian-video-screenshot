@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         截图笔记助手 - Obsidian（模板版）
 // @namespace    https://github.com/taylormao/video-screenshot-obsidian
-// @version      3.1.0
+// @version      3.2.0
 // @description  多模板笔记助手（视频/读书/资源）+ 任意网址视频捕获 + 可选图床外链
 // @author       taylormao
 // @license      MIT
@@ -23,12 +23,12 @@
     // ============================================================
 
     const SCRIPT_PREFIX = 'sno-';
-    const SCRIPT_VERSION = '3.1.0';
+    const SCRIPT_VERSION = '3.2.0';
 
     const CONFIG_KEYS = {
         API_URL: 'obsidian_api_url',
         API_KEY: 'obsidian_api_key',
-        NOTE_INDEX: 'obsidian_note_index_v3',
+        NOTE_INDEX: 'obsidian_note_index_v4',
         CURRENT_TEMPLATE: 'current_template_type',
         IMG_BED_ENABLED: 'obsidian_imgbed_enabled',
         IMG_BED_URL: 'obsidian_imgbed_url',
@@ -62,8 +62,8 @@
                     type: 'video-note',
                 },
                 dynamic: {
-                    title: { label: '标题', source: 'page.title' },
-                    source_url: { label: '视频链接', source: 'page.cleanUrl' },
+                    title: { label: '标题', source: 'page.pageTitle' },
+                    source_url: { label: '视频链接', source: 'page.sourceUrl' },
                     source_name: { label: '来源平台', source: 'page.source' },
                     video_timestamp: { label: '视频时长', source: 'page.videoDuration' },
                 },
@@ -124,9 +124,10 @@
                     type: 'reading-note',
                 },
                 dynamic: {
+                    title: { label: '页面标题', source: 'page.pageTitle' },
                     book_title: { label: '书名', source: 'page.bookTitle' },
                     author: { label: '作者', source: 'page.author' },
-                    source_url: { label: '阅读链接', source: 'page.cleanUrl' },
+                    source_url: { label: '阅读链接', source: 'page.sourceUrl' },
                     source_name: { label: '阅读平台', source: 'page.source' },
                     reading_progress: { label: '阅读进度', source: 'page.progress' },
                 },
@@ -190,8 +191,8 @@
                     type: 'resource-note',
                 },
                 dynamic: {
-                    title: { label: '资源名称', source: 'page.title' },
-                    source_url: { label: '资源链接', source: 'page.cleanUrl' },
+                    title: { label: '页面标题', source: 'page.pageTitle' },
+                    source_url: { label: '资源链接', source: 'page.sourceUrl' },
                     source_name: { label: '来源平台', source: 'page.source' },
                     resource_type: { label: '资源类型', source: 'page.resourceType' },
                 },
@@ -254,6 +255,119 @@
     //
     // 注意：脚本头部不要加 @noframes，iframe 内实例是跨域播放器的捕获端。
     // ============================================================
+    // ============================================================
+    // 页面身份判定（v2.3.0 / v3.2.0 共用实现 v1.0.0）
+    //
+    // 旧问题：source_url 会清掉查询参数，导致同路径下 viewkey / id 不同的
+    //         两个页面被归为同一篇笔记，截图串到同一个 md 文件里。
+    //
+    // 新规则：
+    //   1. source_url = 当前页面完整 URL（保留全部查询参数，仅去掉 # 锚点）
+    //   2. frontmatter 的 title = 当前页面 <title> 内容
+    //   3. 只有「归一 URL」与「规范化 title」两者都相同，才复用同一篇笔记
+    //   4. 归一 URL 仅剔除纯跟踪/时间参数，内容参数一律保留并排序，
+    //      因此「只多了 utm_* 的同一视频」仍能归到一篇笔记
+    //   5. 旧笔记若没有 title 字段，退化为「完整 URL 精确相等」，避免误合并
+    // ============================================================
+    const PageIdentity = (function () {
+        /** 与内容无关的参数：比对身份时剔除 */
+        const TRACKING_PARAMS = [
+            'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'utm_id',
+            'spm', 'scm', 'from', 'ref', 'referer', 'referrer',
+            'share_source', 'share_medium', 'share_plat', 'share_tag', 'share_session_id',
+            'vd_source', 'bbid', 'buvid', 'unique_k', 'autoplay', 'player_rotate',
+            'timestamp', 'ts', '_t', 't', 'time', 'callback', '_', 'random',
+        ];
+
+        function currentUrl(href) {
+            try {
+                const u = new URL(href || window.location.href);
+                u.hash = '';
+                return u.href;
+            } catch (e) {
+                return String(href || window.location.href || '').split('#')[0];
+            }
+        }
+
+        function normalizeTitle(title) {
+            return String(title == null ? '' : title).replace(/\s+/g, ' ').trim();
+        }
+
+        function currentTitle() {
+            return normalizeTitle(document.title || '');
+        }
+
+        /** URL 归一化：剔除跟踪参数、参数按名排序，内容参数（含 viewkey）全部保留 */
+        function normalizeUrl(url) {
+            try {
+                const u = new URL(String(url || '').trim());
+                u.hash = '';
+                const keep = [];
+                u.searchParams.forEach((val, key) => {
+                    if (TRACKING_PARAMS.indexOf(key.toLowerCase()) === -1) keep.push([key, val]);
+                });
+                keep.sort((a, b) => {
+                    if (a[0] !== b[0]) return a[0] < b[0] ? -1 : 1;
+                    if (a[1] !== b[1]) return a[1] < b[1] ? -1 : 1;
+                    return 0;
+                });
+                u.search = '';
+                for (const pair of keep) u.searchParams.append(pair[0], pair[1]);
+                return u.href.replace(/\?$/, '');
+            } catch (e) {
+                return String(url || '').split('#')[0].trim();
+            }
+        }
+
+        /** 身份键 = 归一 URL + 规范化 title */
+        function makeKey(url, title) {
+            return normalizeUrl(url) + '\n' + normalizeTitle(title);
+        }
+
+        function keyForCurrentPage() {
+            return makeKey(currentUrl(), currentTitle());
+        }
+
+        /** 还原 yamlQuote 写入的转义，保证读回的 title 与 document.title 一致 */
+        function unescapeYaml(value) {
+            const s = String(value == null ? '' : value);
+            let out = '';
+            for (let i = 0; i < s.length; i++) {
+                if (s[i] === '\\' && i + 1 < s.length && (s[i + 1] === '"' || s[i + 1] === '\\')) {
+                    out += s[i + 1]; i++; continue;
+                }
+                out += s[i];
+            }
+            return out;
+        }
+
+        /** 用笔记 frontmatter 中的 source_url / title 与当前页面做双条件比对 */
+        function matches(noteUrl, noteTitle, url, title) {
+            const nu = unescapeYaml(String(noteUrl || '').trim());
+            if (!nu) return false;
+            const nt = normalizeTitle(unescapeYaml(noteTitle));
+            if (!nt) {
+                // 旧笔记缺 title：只在完整 URL 精确相等时复用，避免误合并
+                return nu === String(url || '').trim();
+            }
+            return makeKey(nu, nt) === makeKey(url, title);
+        }
+
+        /** YAML 双引号字符串转义，供 frontmatter 的 title / source_url 使用 */
+        function yamlQuote(value) {
+            return '"' + String(value == null ? '' : value)
+                .replace(/\\/g, '\\\\')
+                .replace(/"/g, '\\"')
+                .replace(/\r/g, ' ')
+                .replace(/\n/g, ' ') + '"';
+        }
+
+        return {
+            TRACKING_PARAMS, currentUrl, currentTitle, normalizeTitle,
+            normalizeUrl, makeKey, keyForCurrentPage, matches, yamlQuote,
+        };
+    })();
+
     const VideoProbe = (function () {
         const REQ = '__sno_probe_req__', RES = '__sno_probe_res__';
         const MAX_DEPTH = 5, MAX_NODES = 6000;
@@ -523,11 +637,12 @@
             const title = this._getVideoTitle();
             const source = window.location.hostname.replace('www.', '');
             const url = new URL(window.location.href);
-            const cleanUrl = this._getCleanUrl(url);
+            const cleanUrl = PageIdentity.currentUrl();
             const duration = video ? formatTime(video.duration) : '';
 
             return {
                 videoTitle: title.replace(/[\\/:*?"<>|]/g, '-'),
+                pageTitle: PageIdentity.currentTitle(),
                 pageURL: url.href,
                 cleanUrl: cleanUrl,
                 sourceUrl: cleanUrl,
@@ -564,43 +679,23 @@
             return title;
         },
 
-        _getCleanUrl(url) {
-            const u = new URL(url.href);
-            u.hash = '';
-            if (u.hostname.includes('youtube.com') && u.pathname === '/watch') {
-                const v = u.searchParams.get('v');
-                u.search = '';
-                if (v) u.searchParams.set('v', v);
-                return u.href;
-            }
-            if (u.hostname.includes('bilibili.com')) {
-                const p = u.searchParams.get('p');
-                u.search = '';
-                if (p && p !== '1') u.searchParams.set('p', p);
-                return u.href;
-            }
-            // 其它站点：保留能唯一标识内容的参数，避免不同视频被当成同一篇笔记
-            const keep = ['v', 'bvid', 'aid', 'vid', 'cid', 'id', 'p', 'ep_id', 'season_id', 'season', 'episode'];
-            const picked = [];
-            for (const k of keep) {
-                const val = u.searchParams.get(k);
-                if (val) picked.push([k, val]);
-            }
-            u.search = '';
-            for (const pair of picked) u.searchParams.set(pair[0], pair[1]);
-            return u.href;
+        /** 兼容旧调用：现在一律返回当前页面完整 URL，身份比对交给 PageIdentity */
+        _getCleanUrl() {
+            return PageIdentity.currentUrl();
         },
 
         /** ---------- 读书页面 ---------- */
 
         readingPage() {
             const source = window.location.hostname.replace('www.', '');
+            const fullUrl = PageIdentity.currentUrl();
             return {
                 bookTitle: this._getBookTitle(),
                 author: this._getBookAuthor(),
+                pageTitle: PageIdentity.currentTitle(),
                 source: source,
-                sourceUrl: window.location.href.split('?')[0].split('#')[0],
-                cleanUrl: window.location.href.split('?')[0].split('#')[0],
+                sourceUrl: fullUrl,
+                cleanUrl: fullUrl,
                 pageURL: window.location.href,
                 progress: this._getReadingProgress(),
                 chapterTitle: '',
@@ -638,11 +733,13 @@
 
         resourcePage() {
             const source = window.location.hostname.replace('www.', '');
+            const fullUrl = PageIdentity.currentUrl();
             return {
                 title: document.title || '未命名资源',
+                pageTitle: PageIdentity.currentTitle(),
                 source: source,
-                sourceUrl: window.location.href.split('?')[0].split('#')[0],
-                cleanUrl: window.location.href.split('?')[0].split('#')[0],
+                sourceUrl: fullUrl,
+                cleanUrl: fullUrl,
                 pageURL: window.location.href,
                 resourceType: guessResourceType(),
                 timestamp: new Date().toISOString(),
@@ -738,7 +835,7 @@
             // 动态字段
             for (const [key, def] of Object.entries(fm.dynamic)) {
                 const val = this._resolveSource(pageData, def.source);
-                lines.push(key + ': "' + (val || '').replace(/"/g, '\\"') + '"');
+                lines.push(key + ': ' + PageIdentity.yamlQuote(val));
             }
             // 自动字段
             if (fm.auto.includes('created')) lines.push('created: ' + created);
@@ -874,14 +971,14 @@
         _getIndex() { return GM_getValue(CONFIG_KEYS.NOTE_INDEX, {}); },
         _setIndex(idx) { GM_setValue(CONFIG_KEYS.NOTE_INDEX, idx); },
 
-        getNoteForSourceURL(url) {
+        getNoteByIdentity(key) {
             const idx = this._getIndex();
-            return idx[url] || null;
+            return idx[key] || null;
         },
 
-        setNoteForSourceURL(url, filePath, title, templateType) {
+        setNoteByIdentity(key, filePath, title, templateType) {
             const idx = this._getIndex();
-            idx[url] = { filePath, title, templateType, updatedAt: new Date().toISOString() };
+            idx[key] = { filePath, title, templateType, updatedAt: new Date().toISOString() };
             this._setIndex(idx);
         },
     };
@@ -954,9 +1051,9 @@
         },
 
         /**
-         * 🔑 在目录中搜索含有指定 source_url 的笔记
+         * 🔑 在目录中按「归一 URL + title」双条件搜索笔记
          */
-        async findNoteBySourceURL(folderName, sourceUrl) {
+        async findNoteByIdentity(folderName, sourceUrl, pageTitle) {
             try {
                 const entries = await this.listVault(folderName);
                 if (!Array.isArray(entries)) return null;
@@ -966,7 +1063,9 @@
                     const fp = folderName + '/' + getName(f);
                     try {
                         const content = await this.readFile(fp);
-                        if (getFrontmatterValue(content, 'source_url') === sourceUrl) return fp;
+                        const fmUrl = getFrontmatterValue(content, 'source_url');
+                        const fmTitle = getFrontmatterValue(content, 'title');
+                        if (PageIdentity.matches(fmUrl, fmTitle, sourceUrl, pageTitle)) return fp;
                     } catch (e) { continue; }
                 }
                 return null;
@@ -992,10 +1091,12 @@
             const pageData = tmpl.pageCollector();
 
             const sourceUrl = pageData.sourceUrl || pageData.cleanUrl;
+            const pageTitle = pageData.pageTitle || PageIdentity.currentTitle();
+            const identityKey = PageIdentity.makeKey(sourceUrl, pageTitle);
             const folderName = tmpl.folder;
 
-            // Step 1: 检查索引
-            let indexEntry = Config.getNoteForSourceURL(sourceUrl);
+            // Step 1: 检查索引（归一 URL + title 双条件）
+            let indexEntry = Config.getNoteByIdentity(identityKey);
             if (indexEntry) {
                 try {
                     await ObsidianAPI.request('/vault/' + encodeFilePath(indexEntry.filePath), { method: 'HEAD' });
@@ -1003,10 +1104,10 @@
                 } catch (e) { /* 文件改名，继续搜索 */ }
             }
 
-            // Step 2: 在 Vault 中搜索
-            const foundPath = await ObsidianAPI.findNoteBySourceURL(folderName, sourceUrl);
+            // Step 2: 在 Vault 中按双条件搜索
+            const foundPath = await ObsidianAPI.findNoteByIdentity(folderName, sourceUrl, pageTitle);
             if (foundPath) {
-                Config.setNoteForSourceURL(sourceUrl, foundPath, pageData.videoTitle || pageData.bookTitle || pageData.title, typeId);
+                Config.setNoteByIdentity(identityKey, foundPath, pageData.videoTitle || pageData.bookTitle || pageData.title, typeId);
                 return { filePath: foundPath, isNew: false, pageData, templateType: typeId };
             }
 
@@ -1028,7 +1129,7 @@
             });
 
             await ObsidianAPI.writeFile(filePath, frontmatter + '\n' + header);
-            Config.setNoteForSourceURL(sourceUrl, filePath, noteName, typeId);
+            Config.setNoteByIdentity(identityKey, filePath, noteName, typeId);
             return { filePath, isNew: true, pageData, templateType: typeId };
         },
 

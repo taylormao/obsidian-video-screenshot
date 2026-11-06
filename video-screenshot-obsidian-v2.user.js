@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频截图笔记助手 - Obsidian v2
 // @namespace    https://github.com/taylormao/video-screenshot-obsidian
-// @version      2.2.0
+// @version      2.3.0
 // @description  一键截图视频画面并保存到 Obsidian 笔记（任意网址视频捕获 + 源URL智能追踪）
 // @author       taylormao
 // @license      MIT
@@ -23,13 +23,13 @@
     // ============================================================
 
     const SCRIPT_PREFIX = 'vso-';
-    const SCRIPT_VERSION = '2.2.0';
+    const SCRIPT_VERSION = '2.3.0';
 
     const CONFIG_KEYS = {
         API_URL: 'obsidian_api_url',
         API_KEY: 'obsidian_api_key',
         FOLDER_NAME: 'obsidian_folder_name',
-        NOTE_INDEX: 'obsidian_note_index_v2',  // v2: 用 source_url 做键
+        NOTE_INDEX: 'obsidian_note_index_v4',  // v2: 用 source_url 做键
     };
 
     const DEFAULTS = {
@@ -51,23 +51,9 @@
         return [h, m, sec].map(v => String(v).padStart(2, '0')).join(':');
     }
 
+    /** 兼容旧调用：source_url 现在一律返回当前页面完整 URL */
     function getCleanUrl() {
-        const url = new URL(window.location.href);
-        url.hash = '';
-        if (url.hostname.includes('youtube.com') && url.pathname === '/watch') {
-            const v = url.searchParams.get('v');
-            url.search = '';
-            if (v) url.searchParams.set('v', v);
-            return url.href;
-        }
-        if (url.hostname.includes('bilibili.com')) {
-            const p = url.searchParams.get('p');
-            url.search = '';
-            if (p && p !== '1') url.searchParams.set('p', p);
-            return url.href;
-        }
-        url.search = '';
-        return url.href;
+        return PageIdentity.currentUrl();
     }
 
     function escapeHtml(text) {
@@ -156,7 +142,7 @@
         getFolderName() { return this.get('FOLDER_NAME') || DEFAULTS.FOLDER_NAME; },
         isConfigured() { return !!(this.getApiUrl() && this.getApiKey()); },
 
-        // ---------- 笔记索引 v2（以 source_url 为键）----------
+        // ---------- 笔记索引 v4（以「归一 URL + title」身份键为键）----------
 
         _getIndex() {
             return GM_getValue(CONFIG_KEYS.NOTE_INDEX, {});
@@ -166,16 +152,16 @@
             GM_setValue(CONFIG_KEYS.NOTE_INDEX, index);
         },
 
-        /** 查询某个视频 URL 是否已有笔记 */
-        getNoteForSourceURL(sourceUrl) {
+        /** 按「归一 URL + title」身份键查询已有笔记 */
+        getNoteByIdentity(key) {
             const index = this._getIndex();
-            return index[sourceUrl] || null;
+            return index[key] || null;
         },
 
-        /** 保存笔记索引（source_url → filePath） */
-        setNoteForSourceURL(sourceUrl, filePath, title) {
+        /** 保存笔记索引（身份键 → filePath） */
+        setNoteByIdentity(key, filePath, title) {
             const index = this._getIndex();
-            index[sourceUrl] = {
+            index[key] = {
                 filePath: filePath,
                 title: title,
                 updatedAt: new Date().toISOString(),
@@ -293,10 +279,10 @@
         },
 
         /**
-         * 🔑 在目录中搜索含有指定 source_url 的笔记文件
+         * 🔑 在目录中按「归一 URL + title」双条件搜索笔记
          * 通过逐个读取 .md 文件的 frontmatter 来匹配
          */
-        async findNoteBySourceURL(folderName, sourceUrl) {
+        async findNoteByIdentity(folderName, sourceUrl, pageTitle) {
             try {
                 const entries = await this.listVault(folderName);
                 if (!Array.isArray(entries)) return null;
@@ -314,7 +300,8 @@
                     try {
                         const content = await this.readFile(filePath);
                         const fmSourceUrl = getFrontmatterValue(content, 'source_url');
-                        if (fmSourceUrl === sourceUrl) {
+                        const fmTitle = getFrontmatterValue(content, 'title');
+                        if (PageIdentity.matches(fmSourceUrl, fmTitle, sourceUrl, pageTitle)) {
                             return filePath;
                         }
                     } catch (e) {
@@ -348,6 +335,119 @@
     //
     // 注意：脚本头部不要加 @noframes，iframe 内实例是跨域播放器的捕获端。
     // ============================================================
+    // ============================================================
+    // 页面身份判定（v2.3.0 / v3.2.0 共用实现 v1.0.0）
+    //
+    // 旧问题：source_url 会清掉查询参数，导致同路径下 viewkey / id 不同的
+    //         两个页面被归为同一篇笔记，截图串到同一个 md 文件里。
+    //
+    // 新规则：
+    //   1. source_url = 当前页面完整 URL（保留全部查询参数，仅去掉 # 锚点）
+    //   2. frontmatter 的 title = 当前页面 <title> 内容
+    //   3. 只有「归一 URL」与「规范化 title」两者都相同，才复用同一篇笔记
+    //   4. 归一 URL 仅剔除纯跟踪/时间参数，内容参数一律保留并排序，
+    //      因此「只多了 utm_* 的同一视频」仍能归到一篇笔记
+    //   5. 旧笔记若没有 title 字段，退化为「完整 URL 精确相等」，避免误合并
+    // ============================================================
+    const PageIdentity = (function () {
+        /** 与内容无关的参数：比对身份时剔除 */
+        const TRACKING_PARAMS = [
+            'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'utm_id',
+            'spm', 'scm', 'from', 'ref', 'referer', 'referrer',
+            'share_source', 'share_medium', 'share_plat', 'share_tag', 'share_session_id',
+            'vd_source', 'bbid', 'buvid', 'unique_k', 'autoplay', 'player_rotate',
+            'timestamp', 'ts', '_t', 't', 'time', 'callback', '_', 'random',
+        ];
+
+        function currentUrl(href) {
+            try {
+                const u = new URL(href || window.location.href);
+                u.hash = '';
+                return u.href;
+            } catch (e) {
+                return String(href || window.location.href || '').split('#')[0];
+            }
+        }
+
+        function normalizeTitle(title) {
+            return String(title == null ? '' : title).replace(/\s+/g, ' ').trim();
+        }
+
+        function currentTitle() {
+            return normalizeTitle(document.title || '');
+        }
+
+        /** URL 归一化：剔除跟踪参数、参数按名排序，内容参数（含 viewkey）全部保留 */
+        function normalizeUrl(url) {
+            try {
+                const u = new URL(String(url || '').trim());
+                u.hash = '';
+                const keep = [];
+                u.searchParams.forEach((val, key) => {
+                    if (TRACKING_PARAMS.indexOf(key.toLowerCase()) === -1) keep.push([key, val]);
+                });
+                keep.sort((a, b) => {
+                    if (a[0] !== b[0]) return a[0] < b[0] ? -1 : 1;
+                    if (a[1] !== b[1]) return a[1] < b[1] ? -1 : 1;
+                    return 0;
+                });
+                u.search = '';
+                for (const pair of keep) u.searchParams.append(pair[0], pair[1]);
+                return u.href.replace(/\?$/, '');
+            } catch (e) {
+                return String(url || '').split('#')[0].trim();
+            }
+        }
+
+        /** 身份键 = 归一 URL + 规范化 title */
+        function makeKey(url, title) {
+            return normalizeUrl(url) + '\n' + normalizeTitle(title);
+        }
+
+        function keyForCurrentPage() {
+            return makeKey(currentUrl(), currentTitle());
+        }
+
+        /** 还原 yamlQuote 写入的转义，保证读回的 title 与 document.title 一致 */
+        function unescapeYaml(value) {
+            const s = String(value == null ? '' : value);
+            let out = '';
+            for (let i = 0; i < s.length; i++) {
+                if (s[i] === '\\' && i + 1 < s.length && (s[i + 1] === '"' || s[i + 1] === '\\')) {
+                    out += s[i + 1]; i++; continue;
+                }
+                out += s[i];
+            }
+            return out;
+        }
+
+        /** 用笔记 frontmatter 中的 source_url / title 与当前页面做双条件比对 */
+        function matches(noteUrl, noteTitle, url, title) {
+            const nu = unescapeYaml(String(noteUrl || '').trim());
+            if (!nu) return false;
+            const nt = normalizeTitle(unescapeYaml(noteTitle));
+            if (!nt) {
+                // 旧笔记缺 title：只在完整 URL 精确相等时复用，避免误合并
+                return nu === String(url || '').trim();
+            }
+            return makeKey(nu, nt) === makeKey(url, title);
+        }
+
+        /** YAML 双引号字符串转义，供 frontmatter 的 title / source_url 使用 */
+        function yamlQuote(value) {
+            return '"' + String(value == null ? '' : value)
+                .replace(/\\/g, '\\\\')
+                .replace(/"/g, '\\"')
+                .replace(/\r/g, ' ')
+                .replace(/\n/g, ' ') + '"';
+        }
+
+        return {
+            TRACKING_PARAMS, currentUrl, currentTitle, normalizeTitle,
+            normalizeUrl, makeKey, keyForCurrentPage, matches, yamlQuote,
+        };
+    })();
+
     const VideoProbe = (function () {
         const REQ = '__sno_probe_req__', RES = '__sno_probe_res__';
         const MAX_DEPTH = 5, MAX_NODES = 6000;
@@ -618,14 +718,15 @@
         collect() {
             const currentTimeSeconds = VideoUtils.getCurrentTime();
             const pageURL = this.getCurrentURL();
-            const cleanUrl = getCleanUrl();
+            const cleanUrl = PageIdentity.currentUrl();
             const videoTitle = this.getVideoTitle().replace(/[\\/:*?"<>|]/g, '-');
 
             return {
                 videoTitle: videoTitle,
+                pageTitle: PageIdentity.currentTitle(),
                 pageURL: pageURL,
                 cleanUrl: cleanUrl,
-                sourceUrl: cleanUrl,       // 以此作为唯一标识
+                sourceUrl: cleanUrl,       // 写入 frontmatter 的完整 URL
                 currentTimeSeconds: currentTimeSeconds,
                 currentTime: formatTime(currentTimeSeconds),
                 source: window.location.hostname.replace('www.', ''),
@@ -649,8 +750,8 @@
 
             return [
                 '---',
-                'title: "' + meta.videoTitle + '"',
-                'source_url: ' + meta.sourceUrl,
+                'title: ' + PageIdentity.yamlQuote(meta.pageTitle),
+                'source_url: ' + PageIdentity.yamlQuote(meta.sourceUrl),
                 'source_name: ' + meta.source,
                 'created: ' + created,
                 'modified: ' + created,
@@ -705,10 +806,12 @@
             if (!meta) throw new Error('无法获取页面信息');
 
             const sourceUrl = meta.sourceUrl;
+            const pageTitle = meta.pageTitle;
+            const identityKey = PageIdentity.makeKey(sourceUrl, pageTitle);
             const folderName = Config.getFolderName();
 
-            // Step 1: 检查索引
-            let indexEntry = Config.getNoteForSourceURL(sourceUrl);
+            // Step 1: 检查索引（归一 URL + title 双条件）
+            let indexEntry = Config.getNoteByIdentity(identityKey);
 
             // Step 2: 如果索引存在，验证文件是否还存活
             if (indexEntry) {
@@ -723,39 +826,23 @@
                 }
             }
 
-            // Step 3: 在 Vault 中搜索含有该 source_url 的笔记
-            const foundPath = await ObsidianAPI.findNoteBySourceURL(folderName, sourceUrl);
+            // Step 3: 在 Vault 中按双条件搜索
+            const foundPath = await ObsidianAPI.findNoteByIdentity(folderName, sourceUrl, pageTitle);
             if (foundPath) {
                 // 找到改名后的文件 → 更新索引
-                Config.setNoteForSourceURL(sourceUrl, foundPath, meta.videoTitle);
+                Config.setNoteByIdentity(identityKey, foundPath, meta.videoTitle);
                 return { filePath: foundPath, isNew: false, meta: meta };
             }
 
-            // Step 4: 尝试按标题匹配（兜底策略，兼容没有 frontmatter 的旧笔记）
-            const titlePath = folderName + '/' + meta.videoTitle + '.md';
-            try {
-                await ObsidianAPI.request('/vault/' + encodeFilePath(titlePath), { method: 'HEAD' });
-                // 标题匹配成功 → 可能是旧版笔记或无 frontmatter 的笔记
-                // 升级：写入 frontmatter
-                const existingContent = await ObsidianAPI.readFile(titlePath);
-                if (!getFrontmatterValue(existingContent, 'source_url')) {
-                    // 旧笔记没有 frontmatter → 添加
-                    const fm = NoteTemplate.buildFrontmatter(meta, 1);
-                    const newContent = fm + existingContent.replace(/^---[\s\S]*?---\s*\n?/, '');
-                    await ObsidianAPI.writeFile(titlePath, newContent);
-                }
-                Config.setNoteForSourceURL(sourceUrl, titlePath, meta.videoTitle);
-                return { filePath: titlePath, isNew: false, meta: meta };
-            } catch (e) {
-                // 也不存在 → 创建新笔记
-            }
+            // 注意：不再按文件名/标题兜底复用，否则不同 URL 只要标题相同
+            // 就会被错误地写进同一个 md 文件（身份判定统一由 PageIdentity 负责）
 
-            // Step 5: 创建新笔记
+            // Step 4: 创建新笔记
             const filePath = folderName + '/' + meta.videoTitle + '.md';
             const header = NoteTemplate.buildHeader(meta);
             await ObsidianAPI.writeFile(filePath, header);
 
-            Config.setNoteForSourceURL(sourceUrl, filePath, meta.videoTitle);
+            Config.setNoteByIdentity(identityKey, filePath, meta.videoTitle);
 
             return { filePath: filePath, isNew: true, meta: meta };
         },
@@ -799,9 +886,11 @@
             if (!meta) throw new Error('无法获取页面信息');
 
             const sourceUrl = meta.sourceUrl;
+            const pageTitle = meta.pageTitle;
+            const identityKey = PageIdentity.makeKey(sourceUrl, pageTitle);
             const folderName = Config.getFolderName();
 
-            const existing = Config.getNoteForSourceURL(sourceUrl);
+            const existing = Config.getNoteByIdentity(identityKey);
             if (existing) {
                 // 验证文件是否存在
                 try {
@@ -813,9 +902,9 @@
                 }
             }
 
-            const foundPath = await ObsidianAPI.findNoteBySourceURL(folderName, sourceUrl);
+            const foundPath = await ObsidianAPI.findNoteByIdentity(folderName, sourceUrl, pageTitle);
             if (foundPath) {
-                Config.setNoteForSourceURL(sourceUrl, foundPath, meta.videoTitle);
+                Config.setNoteByIdentity(identityKey, foundPath, meta.videoTitle);
                 throw new Error('该视频笔记已存在：' + foundPath);
             }
 
@@ -823,7 +912,7 @@
             const header = NoteTemplate.buildHeader(meta);
             await ObsidianAPI.writeFile(filePath, header);
 
-            Config.setNoteForSourceURL(sourceUrl, filePath, meta.videoTitle);
+            Config.setNoteByIdentity(identityKey, filePath, meta.videoTitle);
             return filePath;
         },
     };
