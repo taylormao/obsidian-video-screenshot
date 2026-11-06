@@ -1,6 +1,6 @@
 # 视频截图笔记助手 - Obsidian
 
-> v2.2.0 / v3.1.0 · 油猴脚本 · **任意网址视频捕获** + 一键写入 Obsidian 笔记
+> 主线 **v3.1.0** · 油猴脚本 · 多模板笔记 + 可选图床外链 + **任意网址视频捕获**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -8,20 +8,22 @@
 
 ---
 
-## 版本与分支
+## 主分支与版本（2026-11-07 起）
 
-| 分支 | 脚本文件 | 版本 | 说明 |
+**`master` 已切换为 3.1.0 主线**：它现在包含仓库里的全部脚本，`v3.1.0` 是默认推荐安装的版本。`v3-template` 保留为 3.x 的开发/对照分支，日常使用请一律看 `master`。
+
+| 分支 | 脚本文件 | 版本 | 定位 |
 |------|----------|------|------|
-| `master` | `video-screenshot-obsidian-v2.user.js` | **2.2.0** | 标准版：截图以 base64 内嵌 |
-| `master` | `视频截图笔记助手 - Obsidian v2 (图床外链版).js` | **2.2.0** | 图床版：先上传图床，再写 `![|400](url)` 外链 |
-| `v3-template` | `video-screenshot-obsidian-v3.user.js` | **3.1.0** | 模板版：视频 / 读书 / 资源三模板，图床可选（默认关） |
+| **`master`** | **`video-screenshot-obsidian-v3.user.js`** | **3.1.0** | **主推**：视频 / 读书 / 资源三模板 + 可选图床（默认关）+ 全站视频捕获 |
+| `master` | `video-screenshot-obsidian-v2.user.js` | 2.2.0 | 备用：仅视频截图，base64 内嵌，笔记目录可自定义 |
+| `master` | `视频截图笔记助手 - Obsidian v2 (图床外链版).js` | 2.2.0 | 备用：仅视频截图，始终走图床外链 |
 | 两分支 | `video-screenshot-obsidian.user.js` | 历史快照 | **请勿安装**，仅保留作版本追溯 |
 
 安装入口（打开后点 **Raw** 由 Tampermonkey 接管）：
 
+- **3.1.0 主推**：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/video-screenshot-obsidian-v3.user.js>
 - v2 标准版：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/video-screenshot-obsidian-v2.user.js>
 - v2 图床版：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/视频截图笔记助手%20-%20Obsidian%20v2%20(图床外链版).js>
-- v3 模板版：<https://github.com/taylormao/obsidian-video-screenshot/blob/v3-template/video-screenshot-obsidian-v3.user.js>
 
 三个脚本都使用 `@match *://*/*`（覆盖全部 http/https 网址），**没有网址白名单**，也**没有** `@noframes`——iframe 内的脚本实例是跨域播放器的捕获端，请勿手动添加 `@noframes`。
 
@@ -37,11 +39,12 @@
 
 > 端口：脚本默认 `http://127.0.0.1:27123`（插件的 HTTP 端口）。若插件使用 HTTPS，通常是 `https://127.0.0.1:27124`，请在设置面板改成实际值。
 
-### 2. 脚本配置
+### 2. 脚本配置（以 3.1.0 为准）
 
 1. 打开任意视频网站，点击右下角浮动按钮 → ⚙️ 设置
-2. 填写 **REST API 地址**、**API Key**（v2 还需填笔记目录）
+2. 填写 **REST API 地址**、**API Key**（v2 系列还需填笔记目录）
 3. 点击「测试连接」确认成功，再点「保存」
+4. 3.1.0 的笔记目录由模板固定：`视频笔记` / `读书笔记` / `资源收集`，暂不可自定义
 
 ### 3. 使用
 
@@ -52,9 +55,9 @@
 
 ### 4. 图床（可选）
 
+- **3.1.0（主推）**：设置中把「截图存储方式」切到「上传图床，写入外链」，再填接口 URL / Token；**默认关闭**，不切就是 base64 内嵌
+- **v2 图床版**：始终上传，在设置中填「图床上传接口 URL」和「Bearer Token」（可选）
 - **v2 标准版**：不支持，截图内嵌为 base64
-- **v2 图床版**：在设置中填「图床上传接口 URL」和「Bearer Token」（可选）
-- **v3 模板版**：设置中把「截图存储方式」切到「上传图床，写入外链」，再填接口 URL / Token
 
 接口需接受 `multipart/form-data` 的 `file` 字段，返回 JSON；脚本兼容数组、 `{data: ...}`、以及 `publicUrl` / `src` / `url` / `link` 等常见字段。图床不可用时自动回退为 base64 内嵌，不会丢笔记。
 
@@ -125,6 +128,16 @@ tags: [视频笔记]
 
 ## 版本变更
 
+### 2026-11-07 —— 主线切换与凭据归档
+
+| 变更 | 说明 |
+|------|------|
+| 主分支切换 | `master` 合并 `v3-template`，内容升级为 **3.1.0 主线**（含 v3 脚本、`templates/`、两个 v2 脚本）；GitHub 默认分支仍是 `master`，无需改仓库设置 |
+| 安装链接 | 三条安装入口统一指向 `master`，主推 `video-screenshot-obsidian-v3.user.js` |
+| 凭据归档 | 新增 `store.txt`，汇总历史提交中记录过的图床接口 URL / Bearer Token 与 Obsidian API Token（**含明文，见下方安全提示**） |
+
+> 本次未改动任何脚本代码，3.1.0 的功能与 2026-11-06 一致。
+
 ### 2026-11-06 —— 合并与全站捕获
 
 | 版本 | 变更 |
@@ -149,11 +162,16 @@ tags: [视频笔记]
 
 ## 安全提示（重要）
 
-公开仓库的**历史提交**里曾包含明文 Local REST API Key 与图床 Bearer Token。当前版本已从代码中移除并改为设置项，但 Git 历史仍可查阅，请务必：
+⚠️ **`store.txt` 含明文凭据，且本仓库是公开的**：文件中记录了 Obsidian Local REST API Token、图床上传接口 URL 与 Bearer Token，任何访问本仓库的人都能直接读取，自动化爬虫同样会抓取。此外这些值也存在于 Git 历史提交 `c05de5d` 中，删除文件无法消除历史。
+
+请尽快：
 
 1. 在 Obsidian Local REST API 插件中重新生成 API Key；
 2. 在图床后台轮换 Bearer Token；
-3. 更新三个脚本设置面板里的对应值。
+3. 更新三个脚本设置面板里的对应值（脚本代码本身已不含任何硬编码密钥）；
+4. 若不打算保留该文件，把它加入 `.gitignore` 并从仓库移除——但历史中的值仍应视为已泄露，仍须轮换。
+
+`store.txt` 仅作本地配置备份用途，请勿用于任何部署环境。
 
 ---
 
@@ -163,6 +181,8 @@ tags: [视频笔记]
 - [x] v3.0 — 多模板笔记系统
 - [x] v2.1 / v2.2 — 图床外链 + 全站视频捕获
 - [x] v3.1 — 合并两条线的能力，任意网址可用
+- [x] 2026-11-07 — 把 `master` 主分支切换到 3.1.0
+- [ ] 把 `store.txt` 移出公开仓库（加入 `.gitignore`，仅本地保管）
 - [ ] 接线 `loadObsidianTemplate()`，让 `templates/*.md` 真正生效
 - [ ] 截图上传为 Obsidian 本地附件（REST API 二进制写入），替代外部图床
 - [ ] 批量截图模式
