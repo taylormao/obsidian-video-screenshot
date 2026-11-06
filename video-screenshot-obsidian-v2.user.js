@@ -1,8 +1,8 @@
-﻿// ==UserScript==
+// ==UserScript==
 // @name         视频截图笔记助手 - Obsidian v2
 // @namespace    https://github.com/taylormao/video-screenshot-obsidian
-// @version      2.0.3
-// @description  一键截图视频画面并保存到 Obsidian 笔记（v2 源URL索引+智能追踪）
+// @version      2.2.0
+// @description  一键截图视频画面并保存到 Obsidian 笔记（任意网址视频捕获 + 源URL智能追踪）
 // @author       taylormao
 // @license      MIT
 // @match        *://*/*
@@ -23,7 +23,7 @@
     // ============================================================
 
     const SCRIPT_PREFIX = 'vso-';
-    const SCRIPT_VERSION = '2.0.3';
+    const SCRIPT_VERSION = '2.2.0';
 
     const CONFIG_KEYS = {
         API_URL: 'obsidian_api_url',
@@ -33,7 +33,7 @@
     };
 
     const DEFAULTS = {
-        API_URL: 'http://127.0.0.1:27124',
+        API_URL: 'http://127.0.0.1:27123',
         API_KEY: '',
         FOLDER_NAME: '视频笔记',
     };
@@ -334,60 +334,248 @@
     // 第五部分：视频工具函数
     // ============================================================
 
-    const VideoUtils = {
-        getVideo() {
-            if (window.location.hostname.includes('youtube.com')) {
-                const mp = document.querySelector('#movie_player');
-                if (mp) {
-                    const v = mp.querySelector('video.html5-main-video') || mp.querySelector('video');
-                    if (v && (v.videoWidth > 0 || v.readyState >= 2)) return v;
-                }
-                const allVideos = document.querySelectorAll('video');
-                for (const v of allVideos) {
-                    if (v.src && v.src.includes('googlevideo.com')) {
-                        if (v.videoWidth > 0 || v.readyState >= 2) return v;
-                    }
-                }
-            }
-            const selectors = [
-                'video.html5-main-video',
-                'video.bilibili-player-video',
-                'video.bpx-player-video',
-                'video',
-            ];
-            for (const sel of selectors) {
-                const v = document.querySelector(sel);
-                if (v && v.videoWidth > 0) return v;
-            }
-            return document.querySelector('video');
-        },
+    // ============================================================
+    // 通用视频探测与截图（v2.x / v3.x 共用实现 v1.0.0）
+    //
+    // 覆盖以下旧版失效场景：
+    //   1. Shadow DOM 内的 <video>          → 递归遍历 shadowRoot
+    //   2. 同源 iframe 内的 <video>         → 递归遍历 contentDocument
+    //   3. 跨域 iframe 播放器               → postMessage 让 iframe 内的脚本实例代截
+    //   4. 播放器延迟插入 / SPA 切换         → MutationObserver + 轮询等待
+    //   5. 页面多个 <video>（广告/预览）     → 按尺寸、播放状态、可见性打分择优
+    //   6. 跨域视频污染 canvas              → 克隆带 crossOrigin 的 video 重载同一帧
+    //   7. 未知视频站点                     → 播放器特征探测，不再依赖网址白名单
+    //
+    // 注意：脚本头部不要加 @noframes，iframe 内实例是跨域播放器的捕获端。
+    // ============================================================
+    const VideoProbe = (function () {
+        const REQ = '__sno_probe_req__', RES = '__sno_probe_res__';
+        const MAX_DEPTH = 5, MAX_NODES = 6000;
+        const isTop = (() => { try { return window.top === window.self; } catch (e) { return false; } })();
 
-        hasVideo() {
-            const v = this.getVideo();
-            return !!(v && (v.videoWidth > 0 || v.readyState >= 2));
-        },
+        /** 递归收集当前文档、shadow roots、同源 iframe 中的所有 video */
+        function walk(root, out, depth, st) {
+            if (!root || depth > MAX_DEPTH || st.n > MAX_NODES) return;
+            try { root.querySelectorAll('video').forEach(v => out.push({ el: v, depth: depth })); } catch (e) { return; }
+            let nodes;
+            try { nodes = root.querySelectorAll('*'); } catch (e) { return; }
+            for (const el of nodes) {
+                if (++st.n > MAX_NODES) break;
+                if (el.shadowRoot) walk(el.shadowRoot, out, depth + 1, st);
+                if (el.tagName === 'IFRAME') {
+                    try {
+                        if (el.contentDocument) walk(el.contentDocument, out, depth + 1, st);
+                    } catch (e) { /* 跨域 iframe 交给 postMessage */ }
+                }
+            }
+        }
+
+        function collect() {
+            const out = [];
+            walk(document, out, 0, { n: 0 });
+            return out;
+        }
+
+        /** 给候选视频打分，分数最高者最可能是主播放器 */
+        function score(item) {
+            const v = item.el, w = v.videoWidth || 0, h = v.videoHeight || 0;
+            if (!w && !h && v.readyState < 2) return -Infinity;
+            let s = Math.min(w * h / 1000, 4000);
+            if (!w || !h) s -= 500;
+            if (v.readyState >= 2) s += 300;
+            if (v.readyState >= 3) s += 100;
+            if (!v.paused && !v.ended) s += 400;
+            if (v.currentTime > 0) s += 100;
+            try {
+                const view = v.ownerDocument.defaultView;
+                const r = v.getBoundingClientRect(), cs = view.getComputedStyle(v);
+                if (r.width > 0 && r.height > 0) s += 300;
+                if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0) s -= 800;
+            } catch (e) { /* ignore */ }
+            if (/html5-main-video|bpx-player|bilibili-player|vjs-tech|plyr|jw-video|dplayer|art-video|player-video|mplayer|prism-player/i.test(v.className || '')) s += 250;
+            if (w && h && (w < 200 || h < 120)) s -= 600;
+            return s - item.depth * 50;
+        }
+
+        function pick() {
+            let best = null, top = -Infinity;
+            for (const item of collect()) {
+                const s = score(item);
+                if (s > top) { top = s; best = item.el; }
+            }
+            return best;
+        }
+
+        /** 不依赖网址白名单：判断当前页面是否可能是视频播放页 */
+        function looksLikeVideoPage() {
+            if (collect().length) return true;
+            for (const f of document.querySelectorAll('iframe')) {
+                if (/player|embed|youtube|bilibili|vimeo|youku|iqiyi|douyin|video|live|m3u8|mp4/i.test((f.src || '') + ' ' + (f.id || '') + ' ' + (f.className || ''))) return true;
+            }
+            return !!document.querySelector('#movie_player, .bpx-player, .bilibili-player, .dplayer, .artplayer, .plyr, .video-js, .jwplayer, .prism-player, .txp_player, [data-player]');
+        }
+
+        function draw(v) {
+            const c = document.createElement('canvas');
+            c.width = v.videoWidth || v.clientWidth || 1280;
+            c.height = v.videoHeight || v.clientHeight || 720;
+            c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+            return c.toDataURL('image/jpeg', 0.85);
+        }
+
+        /** canvas 被跨域视频污染时的降级：克隆带 CORS 的 video 并 seek 到同一时间点 */
+        function viaClone(v) {
+            return new Promise((resolve) => {
+                const src = v.currentSrc || v.src;
+                if (!src || /^blob:/i.test(src)) { resolve(null); return; }
+                const clone = document.createElement('video');
+                let done = false, timer = null;
+                const finish = (val) => {
+                    if (done) return;
+                    done = true;
+                    clearTimeout(timer);
+                    try { clone.removeAttribute('src'); clone.load(); } catch (e) { /* ignore */ }
+                    resolve(val);
+                };
+                timer = setTimeout(() => finish(null), 3500);
+                clone.crossOrigin = 'anonymous';
+                clone.muted = true;
+                clone.playsInline = true;
+                clone.preload = 'auto';
+                clone.addEventListener('error', () => finish(null));
+                clone.addEventListener('loadeddata', () => {
+                    const grab = () => { try { finish(draw(clone)); } catch (e) { finish(null); } };
+                    clone.addEventListener('seeked', grab, { once: true });
+                    try { clone.currentTime = v.currentTime || 0; } catch (e) { grab(); }
+                    setTimeout(grab, 900);
+                }, { once: true });
+                clone.src = src;
+                clone.load();
+            });
+        }
+
+        async function snapshot(v) {
+            if (!v) return null;
+            try { return draw(v); } catch (e) {
+                console.warn('[截图笔记] 直接绘制失败（canvas 被跨域污染），尝试 CORS 重载', e);
+            }
+            return await viaClone(v);
+        }
+
+        /** 等待视频出现（点击播放才插入 / SPA 路由切换） */
+        function wait(ms) {
+            return new Promise((resolve) => {
+                const found = pick();
+                if (found) { resolve(found); return; }
+                let settled = false, obs = null, ticker = null, stop = null;
+                const done = (val) => {
+                    if (settled) return;
+                    settled = true;
+                    clearInterval(ticker); clearTimeout(stop);
+                    if (obs) obs.disconnect();
+                    resolve(val);
+                };
+                const check = () => { const v = pick(); if (v) done(v); };
+                try {
+                    obs = new MutationObserver(check);
+                    obs.observe(document.documentElement || document, { childList: true, subtree: true });
+                } catch (e) { /* ignore */ }
+                ticker = setInterval(check, 250);
+                stop = setTimeout(() => done(pick()), ms || 3000);
+                check();
+            });
+        }
+
+        /** 顶层向所有 iframe 广播截图请求，等待任一 iframe 实例回传画面 */
+        function askFrames(timeout) {
+            if (!isTop) return Promise.resolve(null);
+            const frames = Array.from(document.querySelectorAll('iframe'));
+            if (!frames.length) return Promise.resolve(null);
+            const id = Date.now() + '-' + Math.random().toString(36).slice(2);
+            return new Promise((resolve) => {
+                let settled = false, timer = null;
+                const finish = (val) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    window.removeEventListener('message', onMsg);
+                    resolve(val);
+                };
+                const onMsg = (e) => {
+                    const d = e.data;
+                    if (d && d.__type === RES && d.id === id && d.dataURL) finish(d);
+                };
+                window.addEventListener('message', onMsg);
+                timer = setTimeout(() => finish(null), timeout || 1800);
+                frames.forEach(f => {
+                    try { f.contentWindow.postMessage({ __type: REQ, id: id }, '*'); } catch (e) { /* ignore */ }
+                });
+            });
+        }
+
+        /**
+         * 完整捕获流程：本地择优 → 跨域 iframe 兜底 → 全部失败返回 dataURL: null
+         * 调用方应把「无画面」当作降级而非致命错误，仍写入时间戳笔记。
+         */
+        async function capture(opts) {
+            const o = opts || {};
+            const local = await wait(o.waitMs || 2500);
+            const weak = local && ((local.videoWidth || 0) < 300 || (local.videoHeight || 0) < 180);
+            if (weak) {
+                const fr = await askFrames(o.frameMs || 1800);
+                if (fr) return { dataURL: fr.dataURL, video: null, info: fr, source: 'iframe' };
+            }
+            if (local) {
+                const dataURL = await snapshot(local);
+                if (dataURL) return { dataURL: dataURL, video: local, info: null, source: 'local' };
+            }
+            const fr2 = await askFrames(o.frameMs || 1800);
+            if (fr2) return { dataURL: fr2.dataURL, video: null, info: fr2, source: 'iframe' };
+            return { dataURL: null, video: local, info: null, source: 'none' };
+        }
+
+        /** iframe 内的脚本实例只做捕获响应，不注入任何 UI */
+        function startResponder() {
+            if (isTop) return;
+            window.addEventListener('message', async (e) => {
+                const d = e.data;
+                if (!d || d.__type !== REQ || !e.source) return;
+                const v = await wait(1200);
+                const dataURL = v ? await snapshot(v) : null;
+                try {
+                    e.source.postMessage({
+                        __type: RES, id: d.id, dataURL: dataURL,
+                        title: document.title,
+                        currentTime: v ? v.currentTime : 0,
+                        href: location.href,
+                    }, '*');
+                } catch (err) { /* ignore */ }
+            });
+        }
+
+        startResponder();
+        return { isTop, collect, pick, looksLikeVideoPage, snapshot, wait, capture };
+    })();
+
+    const VideoUtils = {
+        getVideo() { return VideoProbe.pick(); },
+
+        /** 不再依赖网址白名单，任意含视频/播放器的页面都允许触发 */
+        hasVideo() { return VideoProbe.looksLikeVideoPage(); },
 
         getCurrentTime() {
-            const v = this.getVideo();
-            if (!v) return null;
-            return v.currentTime;
+            const v = VideoProbe.pick();
+            return v ? v.currentTime : 0;
         },
 
-        capture() {
-            const v = this.getVideo();
-            if (!v) return null;
-            try {
-                const canvas = document.createElement('canvas');
-                canvas.width = v.videoWidth;
-                canvas.height = v.videoHeight;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(v, 0, 0);
-                return canvas.toDataURL('image/jpeg', 0.85);
-            } catch (e) {
-                console.error('[视频截图笔记] 截图失败:', e);
-                return null;
-            }
+        /** 异步捕获：本地择优 → iframe 兜底 → CORS 重载；失败返回 null 由调用方降级 */
+        async capture() {
+            const shot = await VideoProbe.capture();
+            this._lastShot = shot;
+            return shot.dataURL;
         },
+
+        lastShot() { return this._lastShot || null; },
     };
 
     // ============================================================
@@ -428,8 +616,6 @@
         },
 
         collect() {
-            const video = VideoUtils.getVideo();
-            if (!video) return null;
             const currentTimeSeconds = VideoUtils.getCurrentTime();
             const pageURL = this.getCurrentURL();
             const cleanUrl = getCleanUrl();
@@ -489,10 +675,16 @@
             return md;
         },
 
-        /** 生成截图块 */
-        buildScreenshotBlock(dataURL, meta) {
+        /** 生成截图块：自动区分 base64 内嵌 / 图床外链 / 捕获失败 */
+        buildScreenshotBlock(imageRef, meta) {
             let md = '### ⏱ ' + meta.currentTime + '\n\n';
-            md += '<img src="' + dataURL + '" width="400" alt="' + meta.currentTime + '" />\n\n';
+            if (!imageRef) {
+                md += '> ⚠️ 未能捕获画面（视频可能受跨域保护）\n\n';
+            } else if (/^data:/.test(imageRef)) {
+                md += '<img src="' + imageRef + '" width="400" alt="' + meta.currentTime + '" />\n\n';
+            } else {
+                md += '![' + meta.currentTime + '|400](' + imageRef + ')\n\n';
+            }
             md += '> 📌 [跳转到视频 ' + meta.currentTime + '](' + PageMeta.getTimestampedURL(meta.currentTimeSeconds) + ')\n\n';
             md += '---\n\n';
             return md;
@@ -702,7 +894,8 @@
         toastTimer: null,
 
         createFloatingButton() {
-            if (this.floatingBtn) return;
+            if (this.floatingBtn && document.body && document.body.contains(this.floatingBtn)) return;
+            this.floatingBtn = null;
             this.floatingBtn = createEl('button', {
                 className: SCRIPT_PREFIX + 'floating-btn',
                 textContent: '📸',
@@ -749,7 +942,7 @@
             if (!this.menu) return;
             const configured = Config.isConfigured();
             const hasVideo = VideoUtils.hasVideo();
-            const disabled = !configured || !hasVideo;
+            const disabled = !configured;   // 任意网址均可触发，捕获层自行降级
 
             while (this.menu.firstChild) this.menu.removeChild(this.menu.firstChild);
 
@@ -761,7 +954,7 @@
             if (!hasVideo) {
                 this.menu.appendChild(createEl('div', {
                     className: SCRIPT_PREFIX + 'menu-status warn',
-                    textContent: '⚠ 未检测到视频',
+                    textContent: '⚠ 顶层未见视频，将尝试 iframe / 延迟加载捕获',
                 }));
             }
 
@@ -976,22 +1169,20 @@
                 UI.showSettings();
                 return;
             }
-            if (!VideoUtils.hasVideo()) {
-                UI.showToast('当前页面未检测到视频', 'warning');
-                return;
-            }
             const meta = PageMeta.collect();
-            if (meta.currentTimeSeconds == null || isNaN(meta.currentTimeSeconds)) {
-                UI.showToast('无法读取视频时间戳', 'error');
-                return;
-            }
 
-            UI.showLoading('正在截图...');
-            const dataURL = VideoUtils.capture();
+            UI.showLoading('正在捕获视频画面...');
+            const dataURL = await VideoUtils.capture();
+            const shot = VideoUtils.lastShot();
+            if (shot && shot.video) {
+                meta.currentTimeSeconds = shot.video.currentTime;
+                meta.currentTime = formatTime(meta.currentTimeSeconds);
+            } else if (shot && shot.info && typeof shot.info.currentTime === 'number') {
+                meta.currentTimeSeconds = shot.info.currentTime;
+                meta.currentTime = formatTime(meta.currentTimeSeconds);
+            }
             if (!dataURL) {
-                UI.hideLoading();
-                UI.showToast('截图失败（可能是跨域限制）', 'error', 5000);
-                return;
+                UI.showToast('未能捕获画面，仍会写入时间戳记录', 'warning', 5000);
             }
 
             try {
@@ -1056,6 +1247,11 @@
     // ============================================================
 
     function init() {
+        // iframe 内实例只作为跨域播放器捕获端，不重复注入 UI 和快捷键
+        if (!VideoProbe.isTop) {
+            console.log('[视频截图笔记-Obsidian] iframe 捕获端已就绪');
+            return;
+        }
         console.log('[视频截图笔记-Obsidian] v' + SCRIPT_VERSION + ' 已加载');
 
         GM_registerMenuCommand('⚙️ Obsidian 设置', () => UI.showSettings());
@@ -1064,25 +1260,24 @@
 
         setupHotkeys();
 
-        let checkTimer = null;
-        function checkVideo() {
-            if (checkTimer) clearTimeout(checkTimer);
-            checkTimer = setTimeout(() => {
-                UI.createFloatingButton();
-                UI.showFloatingButton();
-            }, 500);
+        function ensureButton() {
+            if (UI.floatingBtn && document.body && document.body.contains(UI.floatingBtn)) return;
+            if (!document.body) return;
+            UI.createFloatingButton();
+            UI.showFloatingButton();
         }
-        checkVideo();
+        ensureButton();
 
-        const observer = new MutationObserver(() => checkVideo());
+        let debounce = null;
+        const observer = new MutationObserver(() => {
+            if (debounce) clearTimeout(debounce);
+            debounce = setTimeout(ensureButton, 100);
+        });
         observer.observe(document.documentElement, { childList: true, subtree: true });
 
         let lastURL = window.location.href;
         setInterval(() => {
-            if (window.location.href !== lastURL) {
-                lastURL = window.location.href;
-                checkVideo();
-            }
+            if (window.location.href !== lastURL) { lastURL = window.location.href; ensureButton(); }
         }, 1000);
     }
 

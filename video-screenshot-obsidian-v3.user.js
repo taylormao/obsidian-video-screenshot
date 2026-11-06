@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         截图笔记助手 - Obsidian（模板版）
 // @namespace    https://github.com/taylormao/video-screenshot-obsidian
-// @version      3.0.3
-// @description  多模板笔记助手：视频笔记 / 读书笔记 / 资源笔记，支持 Obsidian 自定义模板
+// @version      3.1.0
+// @description  多模板笔记助手（视频/读书/资源）+ 任意网址视频捕获 + 可选图床外链
 // @author       taylormao
 // @license      MIT
 // @match        *://*/*
@@ -23,18 +23,24 @@
     // ============================================================
 
     const SCRIPT_PREFIX = 'sno-';
-    const SCRIPT_VERSION = '3.0.3';
+    const SCRIPT_VERSION = '3.1.0';
 
     const CONFIG_KEYS = {
         API_URL: 'obsidian_api_url',
         API_KEY: 'obsidian_api_key',
         NOTE_INDEX: 'obsidian_note_index_v3',
         CURRENT_TEMPLATE: 'current_template_type',
+        IMG_BED_ENABLED: 'obsidian_imgbed_enabled',
+        IMG_BED_URL: 'obsidian_imgbed_url',
+        IMG_BED_TOKEN: 'obsidian_imgbed_token',
     };
 
     const DEFAULTS = {
-        API_URL: 'http://127.0.0.1:27124',
+        API_URL: 'http://127.0.0.1:27123',
         API_KEY: '',
+        IMG_BED_ENABLED: '',
+        IMG_BED_URL: '',
+        IMG_BED_TOKEN: '',
     };
 
     // ============================================================
@@ -82,7 +88,7 @@
                 screenshot: [
                     '### ⏱ {{current_time}}',
                     '',
-                    '<img src="{{dataURL}}" width="400" alt="{{current_time}}" />',
+                    '{{image_block}}',
                     '',
                     '> 📌 [跳转到视频 {{current_time}}]({{timestamped_url}})',
                     '',
@@ -234,12 +240,286 @@
     // 第三部分：页面数据采集器
     // ============================================================
 
+    // ============================================================
+    // 通用视频探测与截图（v2.x / v3.x 共用实现 v1.0.0）
+    //
+    // 覆盖以下旧版失效场景：
+    //   1. Shadow DOM 内的 <video>          → 递归遍历 shadowRoot
+    //   2. 同源 iframe 内的 <video>         → 递归遍历 contentDocument
+    //   3. 跨域 iframe 播放器               → postMessage 让 iframe 内的脚本实例代截
+    //   4. 播放器延迟插入 / SPA 切换         → MutationObserver + 轮询等待
+    //   5. 页面多个 <video>（广告/预览）     → 按尺寸、播放状态、可见性打分择优
+    //   6. 跨域视频污染 canvas              → 克隆带 crossOrigin 的 video 重载同一帧
+    //   7. 未知视频站点                     → 播放器特征探测，不再依赖网址白名单
+    //
+    // 注意：脚本头部不要加 @noframes，iframe 内实例是跨域播放器的捕获端。
+    // ============================================================
+    const VideoProbe = (function () {
+        const REQ = '__sno_probe_req__', RES = '__sno_probe_res__';
+        const MAX_DEPTH = 5, MAX_NODES = 6000;
+        const isTop = (() => { try { return window.top === window.self; } catch (e) { return false; } })();
+
+        /** 递归收集当前文档、shadow roots、同源 iframe 中的所有 video */
+        function walk(root, out, depth, st) {
+            if (!root || depth > MAX_DEPTH || st.n > MAX_NODES) return;
+            try { root.querySelectorAll('video').forEach(v => out.push({ el: v, depth: depth })); } catch (e) { return; }
+            let nodes;
+            try { nodes = root.querySelectorAll('*'); } catch (e) { return; }
+            for (const el of nodes) {
+                if (++st.n > MAX_NODES) break;
+                if (el.shadowRoot) walk(el.shadowRoot, out, depth + 1, st);
+                if (el.tagName === 'IFRAME') {
+                    try {
+                        if (el.contentDocument) walk(el.contentDocument, out, depth + 1, st);
+                    } catch (e) { /* 跨域 iframe 交给 postMessage */ }
+                }
+            }
+        }
+
+        function collect() {
+            const out = [];
+            walk(document, out, 0, { n: 0 });
+            return out;
+        }
+
+        /** 给候选视频打分，分数最高者最可能是主播放器 */
+        function score(item) {
+            const v = item.el, w = v.videoWidth || 0, h = v.videoHeight || 0;
+            if (!w && !h && v.readyState < 2) return -Infinity;
+            let s = Math.min(w * h / 1000, 4000);
+            if (!w || !h) s -= 500;
+            if (v.readyState >= 2) s += 300;
+            if (v.readyState >= 3) s += 100;
+            if (!v.paused && !v.ended) s += 400;
+            if (v.currentTime > 0) s += 100;
+            try {
+                const view = v.ownerDocument.defaultView;
+                const r = v.getBoundingClientRect(), cs = view.getComputedStyle(v);
+                if (r.width > 0 && r.height > 0) s += 300;
+                if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0) s -= 800;
+            } catch (e) { /* ignore */ }
+            if (/html5-main-video|bpx-player|bilibili-player|vjs-tech|plyr|jw-video|dplayer|art-video|player-video|mplayer|prism-player/i.test(v.className || '')) s += 250;
+            if (w && h && (w < 200 || h < 120)) s -= 600;
+            return s - item.depth * 50;
+        }
+
+        function pick() {
+            let best = null, top = -Infinity;
+            for (const item of collect()) {
+                const s = score(item);
+                if (s > top) { top = s; best = item.el; }
+            }
+            return best;
+        }
+
+        /** 不依赖网址白名单：判断当前页面是否可能是视频播放页 */
+        function looksLikeVideoPage() {
+            if (collect().length) return true;
+            for (const f of document.querySelectorAll('iframe')) {
+                if (/player|embed|youtube|bilibili|vimeo|youku|iqiyi|douyin|video|live|m3u8|mp4/i.test((f.src || '') + ' ' + (f.id || '') + ' ' + (f.className || ''))) return true;
+            }
+            return !!document.querySelector('#movie_player, .bpx-player, .bilibili-player, .dplayer, .artplayer, .plyr, .video-js, .jwplayer, .prism-player, .txp_player, [data-player]');
+        }
+
+        function draw(v) {
+            const c = document.createElement('canvas');
+            c.width = v.videoWidth || v.clientWidth || 1280;
+            c.height = v.videoHeight || v.clientHeight || 720;
+            c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+            return c.toDataURL('image/jpeg', 0.85);
+        }
+
+        /** canvas 被跨域视频污染时的降级：克隆带 CORS 的 video 并 seek 到同一时间点 */
+        function viaClone(v) {
+            return new Promise((resolve) => {
+                const src = v.currentSrc || v.src;
+                if (!src || /^blob:/i.test(src)) { resolve(null); return; }
+                const clone = document.createElement('video');
+                let done = false, timer = null;
+                const finish = (val) => {
+                    if (done) return;
+                    done = true;
+                    clearTimeout(timer);
+                    try { clone.removeAttribute('src'); clone.load(); } catch (e) { /* ignore */ }
+                    resolve(val);
+                };
+                timer = setTimeout(() => finish(null), 3500);
+                clone.crossOrigin = 'anonymous';
+                clone.muted = true;
+                clone.playsInline = true;
+                clone.preload = 'auto';
+                clone.addEventListener('error', () => finish(null));
+                clone.addEventListener('loadeddata', () => {
+                    const grab = () => { try { finish(draw(clone)); } catch (e) { finish(null); } };
+                    clone.addEventListener('seeked', grab, { once: true });
+                    try { clone.currentTime = v.currentTime || 0; } catch (e) { grab(); }
+                    setTimeout(grab, 900);
+                }, { once: true });
+                clone.src = src;
+                clone.load();
+            });
+        }
+
+        async function snapshot(v) {
+            if (!v) return null;
+            try { return draw(v); } catch (e) {
+                console.warn('[截图笔记] 直接绘制失败（canvas 被跨域污染），尝试 CORS 重载', e);
+            }
+            return await viaClone(v);
+        }
+
+        /** 等待视频出现（点击播放才插入 / SPA 路由切换） */
+        function wait(ms) {
+            return new Promise((resolve) => {
+                const found = pick();
+                if (found) { resolve(found); return; }
+                let settled = false, obs = null, ticker = null, stop = null;
+                const done = (val) => {
+                    if (settled) return;
+                    settled = true;
+                    clearInterval(ticker); clearTimeout(stop);
+                    if (obs) obs.disconnect();
+                    resolve(val);
+                };
+                const check = () => { const v = pick(); if (v) done(v); };
+                try {
+                    obs = new MutationObserver(check);
+                    obs.observe(document.documentElement || document, { childList: true, subtree: true });
+                } catch (e) { /* ignore */ }
+                ticker = setInterval(check, 250);
+                stop = setTimeout(() => done(pick()), ms || 3000);
+                check();
+            });
+        }
+
+        /** 顶层向所有 iframe 广播截图请求，等待任一 iframe 实例回传画面 */
+        function askFrames(timeout) {
+            if (!isTop) return Promise.resolve(null);
+            const frames = Array.from(document.querySelectorAll('iframe'));
+            if (!frames.length) return Promise.resolve(null);
+            const id = Date.now() + '-' + Math.random().toString(36).slice(2);
+            return new Promise((resolve) => {
+                let settled = false, timer = null;
+                const finish = (val) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    window.removeEventListener('message', onMsg);
+                    resolve(val);
+                };
+                const onMsg = (e) => {
+                    const d = e.data;
+                    if (d && d.__type === RES && d.id === id && d.dataURL) finish(d);
+                };
+                window.addEventListener('message', onMsg);
+                timer = setTimeout(() => finish(null), timeout || 1800);
+                frames.forEach(f => {
+                    try { f.contentWindow.postMessage({ __type: REQ, id: id }, '*'); } catch (e) { /* ignore */ }
+                });
+            });
+        }
+
+        /**
+         * 完整捕获流程：本地择优 → 跨域 iframe 兜底 → 全部失败返回 dataURL: null
+         * 调用方应把「无画面」当作降级而非致命错误，仍写入时间戳笔记。
+         */
+        async function capture(opts) {
+            const o = opts || {};
+            const local = await wait(o.waitMs || 2500);
+            const weak = local && ((local.videoWidth || 0) < 300 || (local.videoHeight || 0) < 180);
+            if (weak) {
+                const fr = await askFrames(o.frameMs || 1800);
+                if (fr) return { dataURL: fr.dataURL, video: null, info: fr, source: 'iframe' };
+            }
+            if (local) {
+                const dataURL = await snapshot(local);
+                if (dataURL) return { dataURL: dataURL, video: local, info: null, source: 'local' };
+            }
+            const fr2 = await askFrames(o.frameMs || 1800);
+            if (fr2) return { dataURL: fr2.dataURL, video: null, info: fr2, source: 'iframe' };
+            return { dataURL: null, video: local, info: null, source: 'none' };
+        }
+
+        /** iframe 内的脚本实例只做捕获响应，不注入任何 UI */
+        function startResponder() {
+            if (isTop) return;
+            window.addEventListener('message', async (e) => {
+                const d = e.data;
+                if (!d || d.__type !== REQ || !e.source) return;
+                const v = await wait(1200);
+                const dataURL = v ? await snapshot(v) : null;
+                try {
+                    e.source.postMessage({
+                        __type: RES, id: d.id, dataURL: dataURL,
+                        title: document.title,
+                        currentTime: v ? v.currentTime : 0,
+                        href: location.href,
+                    }, '*');
+                } catch (err) { /* ignore */ }
+            });
+        }
+
+        startResponder();
+        return { isTop, collect, pick, looksLikeVideoPage, snapshot, wait, capture };
+    })();
+
+    // ============================================================
+    // 可选图床：截图上传为外链，避免 base64 撑大笔记（默认关闭）
+    // 合并自 master 2.1.0，地址与令牌改为设置项，不再硬编码
+    // ============================================================
+    const ImgBed = {
+        enabled() { return Config.get('IMG_BED_ENABLED') === '1'; },
+
+        upload(dataURL) {
+            return new Promise((resolve, reject) => {
+                const endpoint = Config.get('IMG_BED_URL');
+                const token = Config.get('IMG_BED_TOKEN');
+                if (!endpoint) { reject(new Error('未配置图床地址')); return; }
+
+                const parts = dataURL.split(',');
+                const mime = (parts[0].match(/:(.*?);/) || [])[1] || 'image/jpeg';
+                let u8;
+                try {
+                    const bin = atob(parts[1] || '');
+                    u8 = new Uint8Array(bin.length);
+                    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+                } catch (e) { reject(new Error('截图数据无效')); return; }
+
+                const fd = new FormData();
+                fd.append('file', new Blob([u8], { type: mime }), 'screenshot-' + Date.now() + '.png');
+
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: endpoint,
+                    headers: token ? { 'Authorization': 'Bearer ' + token } : {},
+                    data: fd,
+                    timeout: 30000,
+                    onload(res) {
+                        try {
+                            const parsed = JSON.parse(res.responseText);
+                            const item = Array.isArray(parsed) ? parsed[0] : (parsed.data || parsed);
+                            let url = null;
+                            if (typeof item === 'string') url = item;
+                            else if (item && typeof item === 'object') url = item.publicUrl || item.src || item.url || item.link;
+                            if (url) resolve(url);
+                            else reject(new Error('图床响应中未找到图片 URL'));
+                        } catch (e) {
+                            reject(new Error('解析图床响应失败: ' + String(res.responseText).slice(0, 160)));
+                        }
+                    },
+                    onerror() { reject(new Error('图床请求失败')); },
+                    ontimeout() { reject(new Error('图床上传超时')); },
+                });
+            });
+        },
+    };
+
     const PageCollectors = {
 
         /** ---------- 视频页面 ---------- */
 
         videoPage() {
-            const video = this._getVideo();
+            const video = VideoProbe.pick();
             const title = this._getVideoTitle();
             const source = window.location.hostname.replace('www.', '');
             const url = new URL(window.location.href);
@@ -253,38 +533,20 @@
                 sourceUrl: cleanUrl,
                 source: source,
                 videoDuration: duration,
-                currentTimeSeconds: video ? video.currentTime : null,
-                currentTime: formatTime(video ? video.currentTime : null),
+                currentTimeSeconds: video ? video.currentTime : 0,
+                currentTime: formatTime(video ? video.currentTime : 0),
                 timestamp: new Date().toISOString(),
             };
         },
 
         async captureVideoFrame() {
-            const video = this._getVideo();
-            if (!video) return null;
-            try {
-                const canvas = document.createElement('canvas');
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                canvas.getContext('2d').drawImage(video, 0, 0);
-                return canvas.toDataURL('image/jpeg', 0.85);
-            } catch (e) { return null; }
+            const shot = await VideoProbe.capture();
+            this.lastCapture = shot;
+            return shot.dataURL;
         },
 
         _getVideo() {
-            if (window.location.hostname.includes('youtube.com')) {
-                const mp = document.querySelector('#movie_player');
-                if (mp) {
-                    const v = mp.querySelector('video.html5-main-video') || mp.querySelector('video');
-                    if (v && (v.videoWidth > 0 || v.readyState >= 2)) return v;
-                }
-            }
-            const selectors = ['video.html5-main-video', 'video.bilibili-player-video', 'video.bpx-player-video', 'video'];
-            for (const sel of selectors) {
-                const v = document.querySelector(sel);
-                if (v && v.videoWidth > 0) return v;
-            }
-            return document.querySelector('video');
+            return VideoProbe.pick();
         },
 
         _getVideoTitle() {
@@ -317,7 +579,15 @@
                 if (p && p !== '1') u.searchParams.set('p', p);
                 return u.href;
             }
+            // 其它站点：保留能唯一标识内容的参数，避免不同视频被当成同一篇笔记
+            const keep = ['v', 'bvid', 'aid', 'vid', 'cid', 'id', 'p', 'ep_id', 'season_id', 'season', 'episode'];
+            const picked = [];
+            for (const k of keep) {
+                const val = u.searchParams.get(k);
+                if (val) picked.push([k, val]);
+            }
             u.search = '';
+            for (const pair of picked) u.searchParams.set(pair[0], pair[1]);
             return u.href;
         },
 
@@ -403,13 +673,14 @@
         detectType() {
             const url = window.location.href;
             for (const [typeId, template] of Object.entries(TEMPLATE_TYPES)) {
-                if (template.urlMatcher(url)) {
-                    return typeId;
-                }
+                try {
+                    if (template.urlMatcher(url)) return typeId;
+                } catch (e) { /* 忽略异常 URL 下的匹配器错误 */ }
             }
-            // 兜底：如果有视频则用视频模板，否则返回 null
-            const video = document.querySelector('video');
-            return video ? 'video-note' : null;
+            // 任意网址：只要探测到 video（含 Shadow DOM / iframe 播放器特征），一律走视频笔记
+            if (VideoProbe.looksLikeVideoPage()) return 'video-note';
+            // 其余网址用通用资源笔记兜底，保证任何网页都能创建/追加笔记
+            return 'resource-note';
         },
 
         /** 获取指定类型的模板定义 */
@@ -524,6 +795,18 @@
     // ============================================================
     // 第五部分：工具函数
     // ============================================================
+
+    /** 生成带时间戳的回跳链接（兼容原本没有 query 的 URL） */
+    function buildTimestampedURL(pageURL, seconds) {
+        try {
+            const u = new URL(pageURL || window.location.href);
+            u.hash = '';
+            if (typeof seconds === 'number' && isFinite(seconds) && seconds >= 0) {
+                u.searchParams.set('t', Math.floor(seconds));
+            }
+            return u.href;
+        } catch (e) { return pageURL || window.location.href; }
+    }
 
     function formatTime(seconds) {
         if (seconds == null || isNaN(seconds)) return '00:00:00';
@@ -768,9 +1051,9 @@
 
             if (typeId === 'video-note') {
                 const block = TemplateManager.buildContentBlock(typeId, 'screenshot', {
-                    current_time: pageData.currentTime || '',
-                    dataURL: pageData.dataURL || '',
-                    timestamped_url: pageData.pageURL + '&t=' + Math.floor(pageData.currentTimeSeconds || 0),
+                    current_time: pageData.currentTime || formatTime(0),
+                    image_block: pageData.imageMarkdown || '> ⚠️ 未能捕获画面（视频可能受跨域保护）',
+                    timestamped_url: buildTimestampedURL(pageData.pageURL, pageData.currentTimeSeconds),
                 });
                 content += '\n' + block;
             } else if (typeId === 'reading-note') {
@@ -857,7 +1140,9 @@
         toastTimer: null,
 
         createFloatingButton() {
-            if (this.floatingBtn) return;
+            if (this.floatingBtn && document.body && document.body.contains(this.floatingBtn)) return;
+            // 按钮被 SPA 移除时允许重建（合并自 master 2.1.0 的防抖修复）
+            this.floatingBtn = null;
             const tmpl = TemplateManager.detectType();
             const icon = tmpl ? TEMPLATE_TYPES[tmpl].icon : '📝';
             this.floatingBtn = createEl('button', {
@@ -867,8 +1152,10 @@
             });
             this.floatingBtn.addEventListener('click', (e) => { e.stopPropagation(); this.toggleMenu(); });
             document.body.appendChild(this.floatingBtn);
-            const badge = createEl('div', { className: SCRIPT_PREFIX + 'version-badge', textContent: 'v' + SCRIPT_VERSION });
-            document.body.appendChild(badge);
+            if (!document.querySelector('.' + SCRIPT_PREFIX + 'version-badge')) {
+                const badge = createEl('div', { className: SCRIPT_PREFIX + 'version-badge', textContent: 'v' + SCRIPT_VERSION });
+                document.body.appendChild(badge);
+            }
             this.updateMenu();
         },
 
@@ -964,29 +1251,41 @@
                             createEl('label', { textContent: 'API Key' }),
                             createEl('input', { type: 'password', id: SCRIPT_PREFIX + 'api-key', value: Config.getApiKey(), placeholder: '输入 API Key' }),
                         ]),
+                        createEl('div', { className: SCRIPT_PREFIX + 'form-group' }, [
+                            createEl('label', { textContent: '截图存储方式' }),
+                            createEl('select', { id: SCRIPT_PREFIX + 'imgbed-enabled' }, [
+                                createEl('option', { value: '0', textContent: '内嵌 base64（默认）' }),
+                                createEl('option', { value: '1', textContent: '上传图床，写入外链' }),
+                            ]),
+                        ]),
+                        createEl('div', { className: SCRIPT_PREFIX + 'form-group' }, [
+                            createEl('label', { textContent: '图床上传接口 URL' }),
+                            createEl('input', { type: 'text', id: SCRIPT_PREFIX + 'imgbed-url', value: Config.get('IMG_BED_URL'), placeholder: 'https://your-imgbed/upload' }),
+                        ]),
+                        createEl('div', { className: SCRIPT_PREFIX + 'form-group' }, [
+                            createEl('label', { textContent: '图床 Bearer Token（可选）' }),
+                            createEl('input', { type: 'password', id: SCRIPT_PREFIX + 'imgbed-token', value: Config.get('IMG_BED_TOKEN'), placeholder: '留空则不发送 Authorization 头' }),
+                        ]),
                         createEl('button', { className: SCRIPT_PREFIX + 'btn ' + SCRIPT_PREFIX + 'btn-secondary', id: SCRIPT_PREFIX + 'test-btn', style: { width: '100%' }, textContent: '🔗 测试连接' }),
                         createEl('div', { className: SCRIPT_PREFIX + 'connection-status', id: SCRIPT_PREFIX + 'conn-status' }),
                         createEl('div', { className: SCRIPT_PREFIX + 'help-text' }, [
                             createEl('strong', { textContent: 'v' + SCRIPT_VERSION + ' 模板类型：' }),
                             createEl('br'),
-                            '📹 视频笔记 - B站/YouTube 截图',
+                            '📹 视频笔记 - 任意含视频的网页（含 Shadow DOM / iframe 播放器）',
                             createEl('br'),
                             '📖 读书笔记 - 微信读书摘录',
                             createEl('br'),
-                            '📦 资源笔记 - 网盘链接收集',
+                            '📦 资源笔记 - 网盘与任意网页兜底',
                             createEl('br'),
                             createEl('br'),
-                            createEl('strong', { textContent: 'Obsidian 自定义模板：' }),
+                            createEl('strong', { textContent: '截图捕获：' }),
                             createEl('br'),
-                            '将模板文件放入 .obsidian/templates/：',
+                            '自动择优主播放器、等待延迟加载、跨域污染时尝试 CORS 重载；',
                             createEl('br'),
-                            '  video-note-template.md',
+                            '完全无法捕获时仍写入时间戳记录。',
                             createEl('br'),
-                            '  reading-note-template.md',
                             createEl('br'),
-                            '  resource-note-template.md',
-                            createEl('br'),
-                            '模板中用 {{field}} 占位，脚本自动替换',
+                            '注：Obsidian 自定义模板读取接口仍为预留，暂未启用。',
                         ]),
                     ]),
                     createEl('div', { className: SCRIPT_PREFIX + 'modal-footer' }, [
@@ -1004,6 +1303,7 @@
             this.modal.addEventListener('click', (e) => { if (e.target === this.modal) closeModal(); });
             this.modal.querySelector('#' + SCRIPT_PREFIX + 'test-btn').addEventListener('click', () => this.testConnection());
             this.modal.querySelector('#' + SCRIPT_PREFIX + 'save-btn').addEventListener('click', () => { this.saveSettings(); closeModal(); });
+            this.modal.querySelector('#' + SCRIPT_PREFIX + 'imgbed-enabled').value = Config.get('IMG_BED_ENABLED') === '1' ? '1' : '0';
             if (Config.getApiKey()) this.testConnection();
         },
 
@@ -1033,6 +1333,9 @@
         saveSettings() {
             Config.set('API_URL', document.querySelector('#' + SCRIPT_PREFIX + 'api-url').value.trim());
             Config.set('API_KEY', document.querySelector('#' + SCRIPT_PREFIX + 'api-key').value.trim());
+            Config.set('IMG_BED_ENABLED', document.querySelector('#' + SCRIPT_PREFIX + 'imgbed-enabled').value);
+            Config.set('IMG_BED_URL', document.querySelector('#' + SCRIPT_PREFIX + 'imgbed-url').value.trim());
+            Config.set('IMG_BED_TOKEN', document.querySelector('#' + SCRIPT_PREFIX + 'imgbed-token').value.trim());
             this.showToast('设置已保存', 'success');
             this.updateMenu();
         },
@@ -1080,18 +1383,42 @@
     const Core = {
         async captureAndSend() {
             if (!Config.isConfigured()) { UI.showToast('请先配置', 'warning'); UI.showSettings(); return; }
-            const typeId = TemplateManager.detectType();
-            if (!typeId) { UI.showToast('当前页面未匹配任何模板', 'warning'); return; }
+            const typeId = TemplateManager.detectType();   // 任意网址都有兜底模板
 
             UI.showLoading('正在采集数据...');
             try {
-                const { filePath, isNew, pageData, templateType } = await NoteManager.getOrCreateNote();
+                const { filePath, isNew, pageData, templateType } = await NoteManager.getOrCreateNote(typeId);
 
                 if (templateType === 'video-note') {
-                    UI.showLoading('正在截图...');
-                    const dataURL = await (TEMPLATE_TYPES[templateType].capture());
-                    if (!dataURL) { UI.hideLoading(); UI.showToast('截图失败', 'error', 5000); return; }
-                    pageData.dataURL = dataURL;
+                    UI.showLoading('正在捕获视频画面...');
+                    const shot = await VideoProbe.capture();
+
+                    // 视频在 iframe 内时顶层读不到进度，用捕获结果回补时间戳
+                    if (shot.video) {
+                        pageData.currentTimeSeconds = shot.video.currentTime;
+                        pageData.currentTime = formatTime(shot.video.currentTime);
+                    } else if (shot.info && typeof shot.info.currentTime === 'number') {
+                        pageData.currentTimeSeconds = shot.info.currentTime;
+                        pageData.currentTime = formatTime(shot.info.currentTime);
+                    }
+
+                    let imageRef = shot.dataURL;
+                    if (imageRef && ImgBed.enabled()) {
+                        UI.showLoading('正在上传截图到图床...');
+                        try {
+                            imageRef = await ImgBed.upload(imageRef);
+                        } catch (e) {
+                            UI.showToast('图床上传失败，改用内嵌图片：' + e.message, 'warning', 5000);
+                        }
+                    }
+
+                    if (imageRef && /^data:/.test(imageRef)) {
+                        pageData.imageMarkdown = '<img src="' + imageRef + '" width="400" alt="' + pageData.currentTime + '" />';
+                    } else if (imageRef) {
+                        pageData.imageMarkdown = '![' + pageData.currentTime + '|400](' + imageRef + ')';
+                    } else {
+                        UI.showToast('未能捕获画面，仍会写入时间戳记录', 'warning', 5000);
+                    }
                 }
 
                 UI.showLoading('正在写入笔记...');
@@ -1135,21 +1462,38 @@
     }
 
     function init() {
-        console.log('[截图笔记助手] v' + SCRIPT_VERSION + ' 已加载 | 模板: ' + (TemplateManager.detectType() || '无'));
+        // iframe 内实例只作为跨域播放器捕获端，不重复注入 UI 和快捷键
+        if (!VideoProbe.isTop) {
+            console.log('[截图笔记助手] iframe 捕获端已就绪');
+            return;
+        }
+
+        console.log('[截图笔记助手] v' + SCRIPT_VERSION + ' 已加载 | 模板: ' + TemplateManager.detectType());
 
         GM_registerMenuCommand('⚙️ 设置', () => UI.showSettings());
         GM_registerMenuCommand('📸 采集并发送 (Ctrl+Shift+S)', () => Core.captureAndSend());
         GM_registerMenuCommand('📄 创建新笔记', () => Core.createNote());
 
         setupHotkeys();
-        setTimeout(() => { UI.createFloatingButton(); UI.showFloatingButton(); }, 500);
 
-        const observer = new MutationObserver(() => setTimeout(() => UI.createFloatingButton(), 300));
+        function ensureButton() {
+            if (UI.floatingBtn && document.body && document.body.contains(UI.floatingBtn)) return;
+            if (!document.body) return;
+            UI.createFloatingButton();
+            UI.showFloatingButton();
+        }
+        ensureButton();
+
+        let debounce = null;
+        const observer = new MutationObserver(() => {
+            if (debounce) clearTimeout(debounce);
+            debounce = setTimeout(ensureButton, 100);
+        });
         observer.observe(document.documentElement, { childList: true, subtree: true });
 
         let lastURL = window.location.href;
         setInterval(() => {
-            if (window.location.href !== lastURL) { lastURL = window.location.href; UI.createFloatingButton(); }
+            if (window.location.href !== lastURL) { lastURL = window.location.href; ensureButton(); }
         }, 1000);
     }
 
