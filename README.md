@@ -1,6 +1,6 @@
 # 视频截图笔记助手 - Obsidian
 
-> 主线 **v3.2.0** / 备用 **v2.3.0** · 油猴脚本 · 多模板笔记 + 可选图床外链 + **任意网址视频捕获**
+> 主线 **v3.2.1** / 备用 **v2.3.1** · 油猴脚本 · 多模板笔记 + 可选图床外链 + **任意网址视频捕获**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -10,18 +10,18 @@
 
 ## 主分支与版本（2026-11-07 起）
 
-**`master` 是 3.x 主线**：它包含仓库里的全部脚本，**v3.2.0** 是默认推荐安装的版本。`v3-template` 保留为 3.x 的开发/对照分支，日常使用请一律看 `master`。
+**`master` 是 3.x 主线**：它包含仓库里的全部脚本，**v3.2.1** 是默认推荐安装的版本。`v3-template` 保留为 3.x 的开发/对照分支，日常使用请一律看 `master`。
 
 | 分支 | 脚本文件 | 版本 | 定位 |
 |------|----------|------|------|
-| **`master`** | **`video-screenshot-obsidian-v3.user.js`** | **3.2.0** | **主推**：视频 / 读书 / 资源三模板 + 可选图床（默认关）+ 全站视频捕获 + 双条件身份判定 |
-| `master` | `video-screenshot-obsidian-v2.user.js` | 2.3.0 | 备用：仅视频截图，base64 内嵌，笔记目录可自定义 |
-| `master` | `视频截图笔记助手 - Obsidian v2 (图床外链版).js` | 2.3.0 | 备用：仅视频截图，始终走图床外链 |
+| **`master`** | **`video-screenshot-obsidian-v3.user.js`** | **3.2.1** | **主推**：视频 / 读书 / 资源三模板 + 可选图床（默认关）+ 全站视频捕获 + 双条件身份判定 |
+| `master` | `video-screenshot-obsidian-v2.user.js` | 2.3.1 | 备用：仅视频截图，base64 内嵌，笔记目录可自定义 |
+| `master` | `视频截图笔记助手 - Obsidian v2 (图床外链版).js` | 2.3.1 | 备用：仅视频截图，始终走图床外链 |
 | 两分支 | `video-screenshot-obsidian.user.js` | 历史快照 | **请勿安装**，仅保留作版本追溯 |
 
 安装入口（打开后点 **Raw** 由 Tampermonkey 接管）：
 
-- **3.2.0 主推**：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/video-screenshot-obsidian-v3.user.js>
+- **3.2.1 主推**：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/video-screenshot-obsidian-v3.user.js>
 - v2 标准版：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/video-screenshot-obsidian-v2.user.js>
 - v2 图床版：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/视频截图笔记助手%20-%20Obsidian%20v2%20(图床外链版).js>
 
@@ -39,12 +39,12 @@
 
 > 端口：脚本默认 `http://127.0.0.1:27123`（插件的 HTTP 端口）。若插件使用 HTTPS，通常是 `https://127.0.0.1:27124`，请在设置面板改成实际值。
 
-### 2. 脚本配置（以 3.2.0 为准）
+### 2. 脚本配置（以 3.2.1 为准）
 
 1. 打开任意视频网站，点击右下角浮动按钮 → ⚙️ 设置
 2. 填写 **REST API 地址**、**API Key**（v2 系列还需填笔记目录）
 3. 点击「测试连接」确认成功，再点「保存」
-4. 3.2.0 的笔记目录由模板固定：`视频笔记` / `读书笔记` / `资源收集`，暂不可自定义
+4. 3.2.1 的笔记目录由模板固定：`视频笔记` / `读书笔记` / `资源收集`，暂不可自定义
 
 ### 3. 使用
 
@@ -55,7 +55,7 @@
 
 ### 4. 图床（可选）
 
-- **3.2.0（主推）**：设置中把「截图存储方式」切到「上传图床，写入外链」，再填接口 URL / Token；**默认关闭**，不切就是 base64 内嵌
+- **3.2.1（主推）**：设置中把「截图存储方式」切到「上传图床，写入外链」，再填接口 URL / Token；**默认关闭**，不切就是 base64 内嵌
 - **v2 图床版**：始终上传，在设置中填「图床上传接口 URL」和「Bearer Token」（可选）
 - **v2 标准版**：不支持，截图内嵌为 base64
 
@@ -137,6 +137,17 @@ tags: [视频笔记]
 - 索引键升级为 `obsidian_note_index_v4`，旧索引自动失效；首次使用新版本会遍历一次 Vault 重建，属正常现象。
 - v2 原有的「按文件名/标题兜底复用」逻辑已移除——它与新规则冲突，会让不同 URL 但标题相同的页面被错误合并。
 
+### 同名笔记去冲突（3.2.1 / 2.3.1）
+
+文件名由页面标题生成，因此**不同 URL 但标题相同**的两个页面原本会指向同一个 `.md` 并互相覆盖。现在创建新笔记前会先读目标文件：若已存在且身份不匹配，则追加可读后缀，例如
+
+```
+视频笔记/同一标题.md
+视频笔记/同一标题-viewkey-BBB.md
+```
+
+后缀优先取 URL 中最后一个内容参数（`参数名-值`），没有内容参数时用身份键的短哈希；生成规则稳定，同一页面重访不会重复建文件。
+
 ## v3 模板系统
 
 | 模板 | 优先匹配 | 笔记目录 |
@@ -152,6 +163,16 @@ tags: [视频笔记]
 ---
 
 ## 版本变更
+
+### 2026-11-07 —— 运行时验证与同名笔记去冲突（3.2.1 / 2.3.1）
+
+| 变更 | 说明 |
+|------|------|
+| 验证方式 | 新增 `tests/verify-note-identity.js`：Node `vm` + 模拟 DOM / GM API / Obsidian REST API，**完整加载脚本**并触发「采集并发送」，检查实际写入的 Markdown |
+| 发现的问题 | 不同 URL 但 `<title>` 相同时，文件名相同导致后一次覆盖前一次笔记（严格断言下复现） |
+| 修复 | 创建笔记前检查同名文件身份，不匹配时追加可读后缀；三个脚本同步 |
+| 结果 | 三个脚本均 9/9 断言通过，运行期无异常 |
+| 说明 | 这是模拟环境回归测试，**不能替代** Tampermonkey + 真实 Obsidian 插件 + 真实视频网站的端到端验证 |
 
 ### 2026-11-07 —— 笔记身份判定修复（3.2.0 / 2.3.0）
 
@@ -229,6 +250,17 @@ tags: [视频笔记]
 - [ ] 统一文件命名，清理历史快照文件
 
 ---
+
+## 回归测试
+
+在仓库根目录运行（需要 Node.js 18+）：
+
+```bash
+node tests/verify-note-identity.js video-screenshot-obsidian-v3.user.js
+node tests/verify-note-identity.js video-screenshot-obsidian-v2.user.js
+```
+
+测试覆盖：脚本能否完整加载并初始化、frontmatter 的 `source_url` / `title` 是否正确、双条件身份判定（不同内容参数、不同 title、仅跟踪参数、参数顺序）、同名笔记去冲突、截图内容是否写入、运行期有无异常。全部通过会输出 `FAILED = 0`。
 
 ## 依赖
 
