@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频截图笔记助手 - Obsidian v2
 // @namespace    https://github.com/taylormao/video-screenshot-obsidian
-// @version      2.3.0
+// @version      2.3.1
 // @description  一键截图视频画面并保存到 Obsidian 笔记（任意网址视频捕获 + 源URL智能追踪）
 // @author       taylormao
 // @license      MIT
@@ -23,7 +23,7 @@
     // ============================================================
 
     const SCRIPT_PREFIX = 'vso-';
-    const SCRIPT_VERSION = '2.3.0';
+    const SCRIPT_VERSION = '2.3.1';
 
     const CONFIG_KEYS = {
         API_URL: 'obsidian_api_url',
@@ -442,9 +442,37 @@
                 .replace(/\n/g, ' ') + '"';
         }
 
+        /** 由身份键生成稳定的短哈希，兜底用于同名笔记的文件名去冲突 */
+        function shortHash(value) {
+            let h = 0x811c9dc5;
+            const s = String(value == null ? '' : value);
+            for (let i = 0; i < s.length; i++) {
+                h = Math.imul((h ^ s.charCodeAt(i)) >>> 0, 0x01000193) >>> 0;
+            }
+            return h.toString(36).padStart(7, '0');
+        }
+
+        /** 同名笔记的可读后缀：优先用最后一个内容参数，否则用身份哈希 */
+        function shortTag(url, title) {
+            try {
+                const u = new URL(String(url || '').trim());
+                const pairs = [];
+                u.searchParams.forEach((val, key) => {
+                    if (TRACKING_PARAMS.indexOf(key.toLowerCase()) === -1 && val) pairs.push([key, val]);
+                });
+                if (pairs.length) {
+                    const last = pairs[pairs.length - 1];
+                    const tag = (last[0] + '-' + last[1]).replace(/[^A-Za-z0-9_\-\u4e00-\u9fa5]/g, '-').slice(0, 40);
+                    if (tag) return tag;
+                }
+            } catch (e) { /* ignore */ }
+            return shortHash(makeKey(url, title));
+        }
+
         return {
             TRACKING_PARAMS, currentUrl, currentTitle, normalizeTitle,
             normalizeUrl, makeKey, keyForCurrentPage, matches, yamlQuote,
+            shortHash, shortTag,
         };
     })();
 
@@ -838,7 +866,14 @@
             // 就会被错误地写进同一个 md 文件（身份判定统一由 PageIdentity 负责）
 
             // Step 4: 创建新笔记
-            const filePath = folderName + '/' + meta.videoTitle + '.md';
+            let filePath = folderName + '/' + meta.videoTitle + '.md';
+            try {
+                const existing = await ObsidianAPI.readFile(filePath);
+                if (!PageIdentity.matches(getFrontmatterValue(existing, 'source_url'), getFrontmatterValue(existing, 'title'), sourceUrl, pageTitle)) {
+                    filePath = folderName + '/' + meta.videoTitle + '-' + PageIdentity.shortTag(sourceUrl, pageTitle) + '.md';
+                }
+            } catch (e) { /* 目标文件不存在，直接使用 */ }
+
             const header = NoteTemplate.buildHeader(meta);
             await ObsidianAPI.writeFile(filePath, header);
 
@@ -908,7 +943,14 @@
                 throw new Error('该视频笔记已存在：' + foundPath);
             }
 
-            const filePath = folderName + '/' + meta.videoTitle + '.md';
+            let filePath = folderName + '/' + meta.videoTitle + '.md';
+            try {
+                const existing = await ObsidianAPI.readFile(filePath);
+                if (!PageIdentity.matches(getFrontmatterValue(existing, 'source_url'), getFrontmatterValue(existing, 'title'), sourceUrl, pageTitle)) {
+                    filePath = folderName + '/' + meta.videoTitle + '-' + PageIdentity.shortTag(sourceUrl, pageTitle) + '.md';
+                }
+            } catch (e) { /* 目标文件不存在，直接使用 */ }
+
             const header = NoteTemplate.buildHeader(meta);
             await ObsidianAPI.writeFile(filePath, header);
 
