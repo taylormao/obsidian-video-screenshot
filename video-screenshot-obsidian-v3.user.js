@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         截图笔记助手 - Obsidian（模板版）
 // @namespace    https://github.com/taylormao/video-screenshot-obsidian
-// @version      3.2.1
+// @version      3.2.2
 // @description  多模板笔记助手（视频/读书/资源）+ 任意网址视频捕获 + 可选图床外链
 // @author       taylormao
 // @license      MIT
@@ -23,7 +23,7 @@
     // ============================================================
 
     const SCRIPT_PREFIX = 'sno-';
-    const SCRIPT_VERSION = '3.2.1';
+    const SCRIPT_VERSION = '3.2.2';
 
     const CONFIG_KEYS = {
         API_URL: 'obsidian_api_url',
@@ -628,7 +628,10 @@
                 } catch (e) { reject(new Error('截图数据无效')); return; }
 
                 const fd = new FormData();
-                fd.append('file', new Blob([u8], { type: mime }), 'screenshot-' + Date.now() + '.png');
+                // 截图是 canvas.toDataURL('image/jpeg') 产出的 JPEG，
+                // 文件名扩展名必须与内容一致，否则部分渲染器按 .png 解码会显示破图
+                const ext = /png/i.test(mime) ? 'png' : 'jpg';
+                fd.append('file', new Blob([u8], { type: mime }), 'screenshot-' + Date.now() + '.' + ext);
 
                 GM_xmlhttpRequest({
                     method: 'POST',
@@ -1549,10 +1552,10 @@
                         }
                     }
 
-                    if (imageRef && /^data:/.test(imageRef)) {
+                    if (imageRef) {
+                        // 统一用 HTML <img>：base64 与外链一致，避免 Obsidian
+                        // 对外部图片 ![...|宽](url) 私有扩展语法解析不稳定
                         pageData.imageMarkdown = '<img src="' + imageRef + '" width="400" alt="' + pageData.currentTime + '" />';
-                    } else if (imageRef) {
-                        pageData.imageMarkdown = '![' + pageData.currentTime + '|400](' + imageRef + ')';
                     } else {
                         UI.showToast('未能捕获画面，仍会写入时间戳记录', 'warning', 5000);
                     }

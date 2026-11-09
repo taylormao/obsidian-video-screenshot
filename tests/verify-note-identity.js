@@ -67,7 +67,7 @@ const documentStub = {
         el.ownerDocument = documentStub;
         if (tag === 'canvas') {
             el.getContext = () => ({ drawImage() {} });
-            el.toDataURL = () => 'data:image/jpeg;base64,FAKEFRAME';
+            el.toDataURL = () => 'data:image/jpeg;base64,RkFLRUZSQU1F';
         }
         return el;
     },
@@ -92,12 +92,18 @@ const gmStore = new Map([
     ['obsidian_api_key', 'test-token'],
 ]);
 
+const uploads = [];
 function fakeXhr(opts) {
     const u = new URL(opts.url);
     const method = opts.method || 'GET';
     const rel = decodeURIComponent(u.pathname.replace(/^\/vault\/?/, ''));
     let status = 200, text = '';
-    if (u.pathname === '/') {
+    if (u.hostname === 'imgbed.example') {
+        const f = opts.data && opts.data.get ? opts.data.get('file') : null;
+        const name = f && f.name ? f.name : 'unknown';
+        uploads.push(name);
+        text = JSON.stringify([{ publicUrl: 'https://imgbed.example/file/' + name }]);
+    } else if (u.pathname === '/') {
         text = JSON.stringify({ ok: true, name: 'MockVault' });
     } else if (method === 'PUT') {
         vault.set(rel, String(opts.data));
@@ -192,15 +198,23 @@ async function run(label, href, title) {
     const r3 = await run('场景3 页面 A + 跟踪参数', 'https://example.com/watch?viewkey=AAA&utm_source=share', '同一标题');
     const r4 = await run('场景4 页面 A 但 title 不同', 'https://example.com/watch?viewkey=AAA', '不同标题');
 
+    gmStore.set('obsidian_imgbed_enabled', '1');
+    gmStore.set('obsidian_imgbed_url', 'https://imgbed.example/upload');
+    gmStore.set('obsidian_imgbed_token', 'test-token');
+    const r5 = await run('场景5 图床外链', 'https://example.com/watch?viewkey=CCC', '外链标题');
+
     const paths = r => [...new Set(r.newWrites.map(w => w.path))];
+    const r5Content = () => { const p = paths(r5)[0]; return p ? (vault.get(p) || '') : ''; };
+    const hasImgBed = source.includes('const ImgBed =');
     const A = 'https://example.com/watch?viewkey=AAA';
     const B = 'https://example.com/watch?viewkey=BBB';
 
     console.log('\n=== VAULT 最终状态（' + vault.size + ' 个文件）===');
     for (const [p, content] of vault) {
         console.log(p + ' => source_url=' + fm(content, 'source_url') + ' | title=' + fm(content, 'title') +
-            ' | 截图块=' + (content.includes('FAKEFRAME') ? '有' : '无'));
+            ' | 截图块=' + (content.includes('data:image/jpeg;base64,') || content.includes('imgbed.example') ? '有' : '无'));
     }
+    if (hasImgBed) console.log('图床上传文件名: ' + (uploads.join(', ') || 'none'));
 
     const checks = [
         ['场景1 frontmatter 写入完整 URL', () => [...vault.values()].some(c => fm(c, 'source_url') === A)],
@@ -222,7 +236,11 @@ async function run(label, href, title) {
             const p1 = paths(r1), p4 = paths(r4);
             return p4.length > 0 && p4.every(p => !p1.includes(p));
         }],
-        ['截图内容已写入笔记', () => [...vault.values()].some(c => c.includes('FAKEFRAME'))],
+        ['截图内容已写入笔记', () => [...vault.values()].some(c => c.includes('data:image/jpeg;base64,') || c.includes('imgbed.example'))],
+        ['笔记不再使用私有图片尺寸语法 ![alt|400](url)', () => ![...vault.values()].some(c => /!\[[^\]]*\|\d+\]\(/.test(c))],
+        ['笔记用 HTML <img width=400> 写图片', () => [...vault.values()].some(c => /<img src="[^"]+" width="400"/.test(c))],
+        ['图床场景写入外链 <img>', () => !hasImgBed || /<img src="https:\/\/imgbed\.example\/file\/[^"]+" width="400"/.test(r5Content())],
+        ['图床上传文件名与 JPEG 内容一致（.jpg）', () => !hasImgBed || (uploads.length > 0 && uploads.every(n => /\.jpg$/i.test(n)))],
         ['运行期无异常', () => runtimeErrors.length === 0],
     ];
     let failed = 0;
