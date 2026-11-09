@@ -1,6 +1,6 @@
 # 视频截图笔记助手 - Obsidian
 
-> 主线 **v3.2.2** / 备用 **v2.3.2** · 油猴脚本 · 多模板笔记 + 可选图床外链 + **任意网址视频捕获**
+> 主线 **v3.2.3** / 备用 **v2.3.3** · 油猴脚本 · 多模板笔记 + 可选图床外链 + **任意网址视频捕获**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -10,18 +10,18 @@
 
 ## 主分支与版本（2026-11-07 起）
 
-**`master` 是 3.x 主线**：它包含仓库里的全部脚本，**v3.2.2** 是默认推荐安装的版本。`v3-template` 保留为 3.x 的开发/对照分支，日常使用请一律看 `master`。
+**`master` 是 3.x 主线**：它包含仓库里的全部脚本，**v3.2.3** 是默认推荐安装的版本。`v3-template` 保留为 3.x 的开发/对照分支，日常使用请一律看 `master`。
 
 | 分支 | 脚本文件 | 版本 | 定位 |
 |------|----------|------|------|
-| **`master`** | **`video-screenshot-obsidian-v3.user.js`** | **3.2.2** | **主推**：视频 / 读书 / 资源三模板 + 可选图床（默认关）+ 全站视频捕获 + 双条件身份判定 |
-| `master` | `video-screenshot-obsidian-v2.user.js` | 2.3.2 | 备用：仅视频截图，base64 内嵌，笔记目录可自定义 |
-| `master` | `视频截图笔记助手 - Obsidian v2 (图床外链版).js` | 2.3.2 | 备用：仅视频截图，始终走图床外链 |
+| **`master`** | **`video-screenshot-obsidian-v3.user.js`** | **3.2.3** | **主推**：视频 / 读书 / 资源三模板 + 可选图床（默认关）+ 全站视频捕获 + 双条件身份判定 |
+| `master` | `video-screenshot-obsidian-v2.user.js` | 2.3.3 | 备用：仅视频截图，base64 内嵌，笔记目录可自定义 |
+| `master` | `视频截图笔记助手 - Obsidian v2 (图床外链版).js` | 2.3.3 | 备用：仅视频截图，始终走图床外链 |
 | 两分支 | `video-screenshot-obsidian.user.js` | 历史快照 | **请勿安装**，仅保留作版本追溯 |
 
 安装入口（打开后点 **Raw** 由 Tampermonkey 接管）：
 
-- **3.2.2 主推**：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/video-screenshot-obsidian-v3.user.js>
+- **3.2.3 主推**：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/video-screenshot-obsidian-v3.user.js>
 - v2 标准版：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/video-screenshot-obsidian-v2.user.js>
 - v2 图床版：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/视频截图笔记助手%20-%20Obsidian%20v2%20(图床外链版).js>
 
@@ -39,12 +39,12 @@
 
 > 端口：脚本默认 `http://127.0.0.1:27123`（插件的 HTTP 端口）。若插件使用 HTTPS，通常是 `https://127.0.0.1:27124`，请在设置面板改成实际值。
 
-### 2. 脚本配置（以 3.2.2 为准）
+### 2. 脚本配置（以 3.2.3 为准）
 
 1. 打开任意视频网站，点击右下角浮动按钮 → ⚙️ 设置
 2. 填写 **REST API 地址**、**API Key**（v2 系列还需填笔记目录）
 3. 点击「测试连接」确认成功，再点「保存」
-4. 3.2.2 的笔记目录由模板固定：`视频笔记` / `读书笔记` / `资源收集`，暂不可自定义
+4. 3.2.3 的笔记目录由模板固定：`视频笔记` / `读书笔记` / `资源收集`，暂不可自定义
 
 ### 3. 使用
 
@@ -55,34 +55,36 @@
 
 ### 4. 图床（可选）
 
-- **3.2.2（主推）**：设置中把「截图存储方式」切到「上传图床，写入外链」，再填接口 URL / Token；**默认关闭**，不切就是 base64 内嵌
+- **3.2.3（主推）**：设置中把「截图存储方式」切到「上传图床，写入外链」，再填接口 URL / Token；**默认关闭**，不切就是 base64 内嵌
 - **v2 图床版**：始终上传，在设置中填「图床上传接口 URL」和「Bearer Token」（可选）
 - **v2 标准版**：不支持，截图内嵌为 base64
 
 接口需接受 `multipart/form-data` 的 `file` 字段，返回 JSON；脚本兼容数组、 `{data: ...}`、以及 `publicUrl` / `src` / `url` / `link` 等常见字段。图床不可用时自动回退为 base64 内嵌，不会丢笔记。
 
-### 5. 截图图片语法（3.2.2 / 2.3.2）
+### 5. 图片渲染问题（排查中）
 
-写入笔记的截图统一使用 HTML：
+脚本**沿用** `![00:01:37|400](url)` 写法（base64 内嵌仍用 `<img>`）。该写法此前在 Obsidian 中可正常渲染，因此不是破图的原因；3.2.2 曾据此改为 HTML `<img>` 并把上传文件名改为 `.jpg`，**现已回退**。
 
-```html
-<img src="https://your-imgbed/file/screenshot-....jpg" width="400" alt="00:01:37" />
-```
+对该图床链接的实测结论（2026-11-09）：
 
-为什么不用 `![alt|400](url)`：
+| 检查项 | 结果 |
+|--------|------|
+| HTTP | 200，`Content-Type: image/jpeg`，229162 字节 |
+| 图片完整性 | SOI / EOI 齐全，解码为 1920×1080 JPEG 成功 |
+| 防盗链 | 带 `Referer: app://obsidian.md/` 仍 200；`Access-Control-Allow-Origin: *` |
+| Chromium 风格请求 | `Accept: image/*` + `Sec-Fetch-Dest: image` 仍返回 200 图片 |
+| Range 请求 | 206、`Content-Range` 正常 |
 
-- 它是**平台私有扩展**，不是标准 Markdown。Obsidian 官方对外部图片使用 `|宽x高`，仅宽度写法主要用于内部 wiki 链接，社区也有「阅读模式忽略外部图片自定义尺寸」的已知问题；Typora 能渲染不代表 Obsidian 能渲染。
-- 实测图床链接本身完全正常（200、`Content-Type: image/jpeg`、无防盗链、`CORS: *`），所以破图来自语法与文件格式的解析，而不是网络。
-- HTML `<img>` 在 Obsidian、Typora、GitHub 都能渲染，同时保留 400px 宽度控制；base64 内嵌与图床外链现在写法一致。
+即脚本生成的 Markdown、图床返回、网络链路三层都正常。既然「前几天 Obsidian 可以、现在不行」，变化点应在 **Obsidian 客户端侧**（版本更新、插件、阅读/编辑模式、本地缓存或代理设置）。
 
-另一个隐藏问题：截图由 `canvas.toDataURL('image/jpeg', 0.85)` 生成，内容是 **JPEG**，而旧版上传时文件名写死 `.png`，扩展名与内容不符，部分渲染器按扩展名解码就会显示破图。现在文件名按实际 MIME 取 `.jpg`。
+定位需要以下信息：
 
-**旧笔记迁移**：3.2.2 之前的笔记里是 `![00:01:37|400](url)`，可批量正则替换：
+1. 前几天能正常显示的那条图片链接（用于逐项对比响应头）；
+2. Obsidian 版本号，以及最近是否更新过 Obsidian 或插件；
+3. 破图时 `Ctrl+Shift+I` → Network/Console 里该图片请求的状态与错误码；
+4. 是在阅读模式还是实时预览模式。
 
-- 查找：`!\[([^\]|]+)\|400\]\(([^)]+)\)`
-- 替换：`<img src="$2" width="400" alt="$1" />`
-
-注意旧外链的文件名仍是 `.png`（内容为 JPEG）。若替换后 Obsidian 仍显示破图，说明该渲染器按扩展名解码，只能重新截图生成新的 `.jpg` 外链，或把图片下载为 Vault 本地附件。
+在根因确认前，可临时把图片下载进 Vault 用 `![[本地附件]]` 规避外部加载。
 
 ---
 
@@ -187,7 +189,16 @@ tags: [视频笔记]
 
 ## 版本变更
 
-### 2026-11-09 —— 截图图片渲染修复（3.2.2 / 2.3.2）
+### 2026-11-09 —— 回退误判修复（3.2.3 / 2.3.3）
+
+| 变更 | 说明 |
+|------|------|
+| 回退 | 撤销 3.2.2 的图片语法与 `.jpg` 文件名改动，恢复到此前的写法 |
+| 原因 | 「`![alt\|400](url)` 不兼容 Obsidian」「`.png` 扩展名导致破图」两个推断都不成立：这两点前几天就存在且当时能渲染；实测图片完整可解码、各类请求均 200 |
+| 现状 | 破图原因待定位，方向为 Obsidian 客户端侧；保留回归测试中的图床外链场景 |
+| 备注 | 3.2.2 / 2.3.2 已废弃，请勿使用 |
+
+### 2026-11-09 —— 截图图片渲染修复（已回退，3.2.2 / 2.3.2）
 
 | 变更 | 说明 |
 |------|------|
@@ -295,7 +306,7 @@ node tests/verify-note-identity.js video-screenshot-obsidian-v3.user.js
 node tests/verify-note-identity.js video-screenshot-obsidian-v2.user.js
 ```
 
-测试覆盖：脚本能否完整加载并初始化、frontmatter 的 `source_url` / `title`、双条件身份判定、同名笔记去冲突、图床外链上传（含上传文件名扩展名）、写入的图片语法是否为兼容的 `<img>`、运行期有无异常。全部通过会输出 `FAILED = 0`。
+测试覆盖：脚本能否完整加载并初始化、frontmatter 的 `source_url` / `title`、双条件身份判定、同名笔记去冲突、图床外链上传、写入的图片语法（`![alt|400](url)` / base64 `<img>`）、运行期有无异常。全部通过会输出 `FAILED = 0`。
 
 ## 依赖
 
