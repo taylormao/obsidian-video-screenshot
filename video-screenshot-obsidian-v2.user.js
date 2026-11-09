@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频截图笔记助手 - Obsidian v2
 // @namespace    https://github.com/taylormao/video-screenshot-obsidian
-// @version      2.3.1
+// @version      2.3.2
 // @description  一键截图视频画面并保存到 Obsidian 笔记（任意网址视频捕获 + 源URL智能追踪）
 // @author       taylormao
 // @license      MIT
@@ -23,7 +23,7 @@
     // ============================================================
 
     const SCRIPT_PREFIX = 'vso-';
-    const SCRIPT_VERSION = '2.3.1';
+    const SCRIPT_VERSION = '2.3.2';
 
     const CONFIG_KEYS = {
         API_URL: 'obsidian_api_url',
@@ -809,10 +809,10 @@
             let md = '### ⏱ ' + meta.currentTime + '\n\n';
             if (!imageRef) {
                 md += '> ⚠️ 未能捕获画面（视频可能受跨域保护）\n\n';
-            } else if (/^data:/.test(imageRef)) {
-                md += '<img src="' + imageRef + '" width="400" alt="' + meta.currentTime + '" />\n\n';
             } else {
-                md += '![' + meta.currentTime + '|400](' + imageRef + ')\n\n';
+                // 统一用 HTML <img>：Obsidian 对外部图片的 ![...|宽](url) 扩展语法支持不稳定，
+                // 而 <img> 在 Obsidian / Typora / GitHub 都能渲染，且可控制宽度
+                md += '<img src="' + imageRef + '" width="400" alt="' + meta.currentTime + '" />\n\n';
             }
             md += '> 📌 [跳转到视频 ' + meta.currentTime + '](' + PageMeta.getTimestampedURL(meta.currentTimeSeconds) + ')\n\n';
             md += '---\n\n';

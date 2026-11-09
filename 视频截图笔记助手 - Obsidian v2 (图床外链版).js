@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频截图笔记助手 - Obsidian v2 (图床外链版)
 // @namespace    https://github.com/taylormao/video-screenshot-obsidian
-// @version      2.3.1
+// @version      2.3.2
 // @description  截图上传到图床后把外链写入 Obsidian（任意网址视频捕获，图床地址与令牌可配置）
 // @author       taylormao
 // @license      MIT
@@ -23,7 +23,7 @@
     // ============================================================
 
     const SCRIPT_PREFIX = 'vso-';
-    const SCRIPT_VERSION = '2.3.1';
+    const SCRIPT_VERSION = '2.3.2';
 
     const CONFIG_KEYS = {
         API_URL: 'obsidian_api_url',
@@ -195,7 +195,10 @@
 
                 const blob = dataURLtoBlob(dataURL);
                 const formData = new FormData();
-                formData.append('file', blob, `video-screenshot-${Date.now()}.png`);
+                // canvas.toDataURL('image/jpeg') 产出 JPEG，扩展名必须匹配内容，
+                // 否则 Obsidian 等渲染器按 .png 解码 JPEG 数据会显示破图
+                const ext = /^data:image\/png/i.test(dataURL) ? 'png' : 'jpg';
+                formData.append('file', blob, `video-screenshot-${Date.now()}.${ext}`);
 
                 GM_xmlhttpRequest({
                     method: 'POST',
@@ -851,10 +854,10 @@
             let md = '### ⏱ ' + meta.currentTime + '\n\n';
             if (!imageRef) {
                 md += '> ⚠️ 未能捕获画面（视频可能受跨域保护）\n\n';
-            } else if (/^data:/.test(imageRef)) {
-                md += '<img src="' + imageRef + '" width="400" alt="' + meta.currentTime + '" />\n\n';
             } else {
-                md += '![' + meta.currentTime + '|400](' + imageRef + ')\n\n';
+                // 统一用 HTML <img>：Obsidian 对外部图片的 ![...|宽](url) 扩展语法支持不稳定，
+                // 而 <img> 在 Obsidian / Typora / GitHub 都能渲染，且可控制宽度
+                md += '<img src="' + imageRef + '" width="400" alt="' + meta.currentTime + '" />\n\n';
             }
             md += '> 📌 [跳转到视频 ' + meta.currentTime + '](' + PageMeta.getTimestampedURL(meta.currentTimeSeconds) + ')\n\n';
             md += '---\n\n';

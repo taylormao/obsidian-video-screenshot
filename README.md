@@ -1,6 +1,6 @@
 # 视频截图笔记助手 - Obsidian
 
-> 主线 **v3.2.1** / 备用 **v2.3.1** · 油猴脚本 · 多模板笔记 + 可选图床外链 + **任意网址视频捕获**
+> 主线 **v3.2.2** / 备用 **v2.3.2** · 油猴脚本 · 多模板笔记 + 可选图床外链 + **任意网址视频捕获**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -10,18 +10,18 @@
 
 ## 主分支与版本（2026-11-07 起）
 
-**`master` 是 3.x 主线**：它包含仓库里的全部脚本，**v3.2.1** 是默认推荐安装的版本。`v3-template` 保留为 3.x 的开发/对照分支，日常使用请一律看 `master`。
+**`master` 是 3.x 主线**：它包含仓库里的全部脚本，**v3.2.2** 是默认推荐安装的版本。`v3-template` 保留为 3.x 的开发/对照分支，日常使用请一律看 `master`。
 
 | 分支 | 脚本文件 | 版本 | 定位 |
 |------|----------|------|------|
-| **`master`** | **`video-screenshot-obsidian-v3.user.js`** | **3.2.1** | **主推**：视频 / 读书 / 资源三模板 + 可选图床（默认关）+ 全站视频捕获 + 双条件身份判定 |
-| `master` | `video-screenshot-obsidian-v2.user.js` | 2.3.1 | 备用：仅视频截图，base64 内嵌，笔记目录可自定义 |
-| `master` | `视频截图笔记助手 - Obsidian v2 (图床外链版).js` | 2.3.1 | 备用：仅视频截图，始终走图床外链 |
+| **`master`** | **`video-screenshot-obsidian-v3.user.js`** | **3.2.2** | **主推**：视频 / 读书 / 资源三模板 + 可选图床（默认关）+ 全站视频捕获 + 双条件身份判定 |
+| `master` | `video-screenshot-obsidian-v2.user.js` | 2.3.2 | 备用：仅视频截图，base64 内嵌，笔记目录可自定义 |
+| `master` | `视频截图笔记助手 - Obsidian v2 (图床外链版).js` | 2.3.2 | 备用：仅视频截图，始终走图床外链 |
 | 两分支 | `video-screenshot-obsidian.user.js` | 历史快照 | **请勿安装**，仅保留作版本追溯 |
 
 安装入口（打开后点 **Raw** 由 Tampermonkey 接管）：
 
-- **3.2.1 主推**：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/video-screenshot-obsidian-v3.user.js>
+- **3.2.2 主推**：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/video-screenshot-obsidian-v3.user.js>
 - v2 标准版：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/video-screenshot-obsidian-v2.user.js>
 - v2 图床版：<https://github.com/taylormao/obsidian-video-screenshot/blob/master/视频截图笔记助手%20-%20Obsidian%20v2%20(图床外链版).js>
 
@@ -39,12 +39,12 @@
 
 > 端口：脚本默认 `http://127.0.0.1:27123`（插件的 HTTP 端口）。若插件使用 HTTPS，通常是 `https://127.0.0.1:27124`，请在设置面板改成实际值。
 
-### 2. 脚本配置（以 3.2.1 为准）
+### 2. 脚本配置（以 3.2.2 为准）
 
 1. 打开任意视频网站，点击右下角浮动按钮 → ⚙️ 设置
 2. 填写 **REST API 地址**、**API Key**（v2 系列还需填笔记目录）
 3. 点击「测试连接」确认成功，再点「保存」
-4. 3.2.1 的笔记目录由模板固定：`视频笔记` / `读书笔记` / `资源收集`，暂不可自定义
+4. 3.2.2 的笔记目录由模板固定：`视频笔记` / `读书笔记` / `资源收集`，暂不可自定义
 
 ### 3. 使用
 
@@ -55,11 +55,34 @@
 
 ### 4. 图床（可选）
 
-- **3.2.1（主推）**：设置中把「截图存储方式」切到「上传图床，写入外链」，再填接口 URL / Token；**默认关闭**，不切就是 base64 内嵌
+- **3.2.2（主推）**：设置中把「截图存储方式」切到「上传图床，写入外链」，再填接口 URL / Token；**默认关闭**，不切就是 base64 内嵌
 - **v2 图床版**：始终上传，在设置中填「图床上传接口 URL」和「Bearer Token」（可选）
 - **v2 标准版**：不支持，截图内嵌为 base64
 
 接口需接受 `multipart/form-data` 的 `file` 字段，返回 JSON；脚本兼容数组、 `{data: ...}`、以及 `publicUrl` / `src` / `url` / `link` 等常见字段。图床不可用时自动回退为 base64 内嵌，不会丢笔记。
+
+### 5. 截图图片语法（3.2.2 / 2.3.2）
+
+写入笔记的截图统一使用 HTML：
+
+```html
+<img src="https://your-imgbed/file/screenshot-....jpg" width="400" alt="00:01:37" />
+```
+
+为什么不用 `![alt|400](url)`：
+
+- 它是**平台私有扩展**，不是标准 Markdown。Obsidian 官方对外部图片使用 `|宽x高`，仅宽度写法主要用于内部 wiki 链接，社区也有「阅读模式忽略外部图片自定义尺寸」的已知问题；Typora 能渲染不代表 Obsidian 能渲染。
+- 实测图床链接本身完全正常（200、`Content-Type: image/jpeg`、无防盗链、`CORS: *`），所以破图来自语法与文件格式的解析，而不是网络。
+- HTML `<img>` 在 Obsidian、Typora、GitHub 都能渲染，同时保留 400px 宽度控制；base64 内嵌与图床外链现在写法一致。
+
+另一个隐藏问题：截图由 `canvas.toDataURL('image/jpeg', 0.85)` 生成，内容是 **JPEG**，而旧版上传时文件名写死 `.png`，扩展名与内容不符，部分渲染器按扩展名解码就会显示破图。现在文件名按实际 MIME 取 `.jpg`。
+
+**旧笔记迁移**：3.2.2 之前的笔记里是 `![00:01:37|400](url)`，可批量正则替换：
+
+- 查找：`!\[([^\]|]+)\|400\]\(([^)]+)\)`
+- 替换：`<img src="$2" width="400" alt="$1" />`
+
+注意旧外链的文件名仍是 `.png`（内容为 JPEG）。若替换后 Obsidian 仍显示破图，说明该渲染器按扩展名解码，只能重新截图生成新的 `.jpg` 外链，或把图片下载为 Vault 本地附件。
 
 ---
 
@@ -164,6 +187,18 @@ tags: [视频笔记]
 
 ## 版本变更
 
+### 2026-11-09 —— 截图图片渲染修复（3.2.2 / 2.3.2）
+
+| 变更 | 说明 |
+|------|------|
+| 现象 | 图床外链截图在 Obsidian 显示破图，Typora 能正常渲染 |
+| 诊断 | 实测图片 URL 返回 200 / `Content-Type: image/jpeg` / 无防盗链 / `CORS: *`，资源本身正常 |
+| 原因 1 | 截图是 JPEG，上传文件名却写死 `.png`，扩展名与内容不符 |
+| 原因 2 | `![alt\|400](url)` 是平台私有扩展，Obsidian 对外部图片支持不稳定 |
+| 修复 | 上传文件名按实际 MIME 取 `.jpg`；图片统一写为 `<img src="..." width="400" alt="...">` |
+| 验证 | 回归测试新增图床外链场景，校验上传文件名与写入的图片语法；三个脚本全部断言通过 |
+| 旧笔记 | 见「截图图片语法」一节的批量替换说明 |
+
 ### 2026-11-07 —— 运行时验证与同名笔记去冲突（3.2.1 / 2.3.1）
 
 | 变更 | 说明 |
@@ -260,7 +295,7 @@ node tests/verify-note-identity.js video-screenshot-obsidian-v3.user.js
 node tests/verify-note-identity.js video-screenshot-obsidian-v2.user.js
 ```
 
-测试覆盖：脚本能否完整加载并初始化、frontmatter 的 `source_url` / `title` 是否正确、双条件身份判定（不同内容参数、不同 title、仅跟踪参数、参数顺序）、同名笔记去冲突、截图内容是否写入、运行期有无异常。全部通过会输出 `FAILED = 0`。
+测试覆盖：脚本能否完整加载并初始化、frontmatter 的 `source_url` / `title`、双条件身份判定、同名笔记去冲突、图床外链上传（含上传文件名扩展名）、写入的图片语法是否为兼容的 `<img>`、运行期有无异常。全部通过会输出 `FAILED = 0`。
 
 ## 依赖
 
