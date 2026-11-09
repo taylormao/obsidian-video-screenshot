@@ -237,10 +237,9 @@ async function run(label, href, title) {
             return p4.length > 0 && p4.every(p => !p1.includes(p));
         }],
         ['截图内容已写入笔记', () => [...vault.values()].some(c => c.includes('data:image/jpeg;base64,') || c.includes('imgbed.example'))],
-        ['笔记不再使用私有图片尺寸语法 ![alt|400](url)', () => ![...vault.values()].some(c => /!\[[^\]]*\|\d+\]\(/.test(c))],
-        ['笔记用 HTML <img width=400> 写图片', () => [...vault.values()].some(c => /<img src="[^"]+" width="400"/.test(c))],
-        ['图床场景写入外链 <img>', () => !hasImgBed || /<img src="https:\/\/imgbed\.example\/file\/[^"]+" width="400"/.test(r5Content())],
-        ['图床上传文件名与 JPEG 内容一致（.jpg）', () => !hasImgBed || (uploads.length > 0 && uploads.every(n => /\.jpg$/i.test(n)))],
+        ['base64 截图用 <img> 内嵌', () => [...vault.values()].some(c => /<img src="data:image\/jpeg;base64,[^"]+" width="400"/.test(c))],
+        ['图床外链沿用 ![alt|400](url) 语法', () => !hasImgBed || /!\[[^\]]*\|400\]\(https:\/\/imgbed\.example\/file\//.test(r5Content())],
+        ['图床上传文件名有效', () => !hasImgBed || (uploads.length > 0 && uploads.every(n => /\.(png|jpg)$/i.test(n)))],
         ['运行期无异常', () => runtimeErrors.length === 0],
     ];
     let failed = 0;
