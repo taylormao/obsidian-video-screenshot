@@ -3,6 +3,14 @@ const fs = require('fs');
 const vm = require('vm');
 
 const scriptPath = process.argv[2];
+if (!scriptPath) {
+    console.error('用法: node tests/verify-note-identity.js <脚本路径>');
+    process.exit(1);
+}
+if (!fs.existsSync(scriptPath)) {
+    console.error('文件不存在: ' + scriptPath);
+    process.exit(1);
+}
 const source = fs.readFileSync(scriptPath, 'utf8');
 
 const vault = new Map();
@@ -101,8 +109,13 @@ function fakeXhr(opts) {
     if (u.hostname === 'imgbed.example') {
         const f = opts.data && opts.data.get ? opts.data.get('file') : null;
         const name = f && f.name ? f.name : 'unknown';
-        uploads.push(name);
-        text = JSON.stringify([{ publicUrl: 'https://imgbed.example/file/' + name }]);
+        if (u.pathname.includes('fail502')) {
+            status = 502;
+            text = JSON.stringify([{ publicUrl: 'https://imgbed.example/err-502.png' }]);
+        } else {
+            uploads.push(name);
+            text = JSON.stringify([{ publicUrl: 'https://imgbed.example/file/' + name }]);
+        }
     } else if (u.pathname === '/') {
         text = JSON.stringify({ ok: true, name: 'MockVault' });
     } else if (method === 'PUT') {
@@ -164,11 +177,12 @@ const capture = menuCommands.find(m => m.name.includes('采集并发送') || m.n
 if (!capture) { console.log('FATAL 未找到「采集并发送」命令'); process.exit(1); }
 
 function fm(content, key) {
-    const m = content.match(/^---\s*\n([\s\S]*?)\n---/);
+    const m = content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
     if (!m) return null;
-    const km = m[1].match(new RegExp('^' + key + ':\\s*(.+)$', 'm'));
+    const km = m[1].match(new RegExp('^' + key + ':\\s*(.*?)\\r?$', 'm'));
     if (!km) return null;
     let v = km[1].trim();
+    if (!v) return null;
     if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
     return v;
 }
@@ -203,14 +217,66 @@ async function run(label, href, title) {
     gmStore.set('obsidian_imgbed_token', 'test-token');
     const r5 = await run('场景5 图床外链', 'https://example.com/watch?viewkey=CCC', '外链标题');
 
+    // 场景6：同名多级去冲突（三个不同路径且最后一个参数均为 id=1，title 相同）
+    const r6a = await run('场景6a 多级冲突-A', 'https://example.com/a?id=1', '二次冲突标题');
+    const r6b = await run('场景6b 多级冲突-B', 'https://example.com/b?id=1', '二次冲突标题');
+    const r6c = await run('场景6c 多级冲突-C（二级哈希兜底）', 'https://example.com/c?id=1', '二次冲突标题');
+
+    // 场景7：图床返回 HTTP 502 时必须拒绝并回退 base64，不写入错误外链
+    const hasImgBed = source.includes('const ImgBed =');
+    let r7 = { newWrites: [], errs: [] };
+    if (hasImgBed) {
+        gmStore.set('obsidian_imgbed_url', 'https://imgbed.example/fail502');
+        r7 = await run('场景7 图床 HTTP 502 回退', 'https://example.com/watch?viewkey=FAIL502', '图床失败回退');
+        gmStore.set('obsidian_imgbed_url', 'https://imgbed.example/upload');
+    }
+
+    // 场景8：Vault 目录超过 50 篇笔记且索引失效时，仍能匹配第 61 篇
+    for (let i = 1; i <= 60; i++) {
+        const idx = String(i).padStart(2, '0');
+        vault.set('视频笔记/占位-' + idx + '.md', '---\ntitle: "占位' + idx + '"\nsource_url: "https://example.com/stub/' + idx + '"\n---\n');
+    }
+    vault.set('视频笔记/第六十一篇.md', '---\ntitle: "第六十一篇"\nsource_url: "https://example.com/watch?viewkey=OVER50"\n---\n\n# 第六十一篇\n');
+    gmStore.delete('obsidian_note_index_v4');
+    const r8 = await run('场景8 超过50篇笔记的Vault匹配', 'https://example.com/watch?viewkey=OVER50', '第六十一篇');
+
+    // 场景9：v3 自定义模板接线（仅在支持 loadObsidianTemplate 时验证）
+    const hasCustomTmpl = source.includes('renderCustomTemplate');
+    let r9 = { newWrites: [], errs: [] };
+    if (hasCustomTmpl) {
+        vault.set('.obsidian/templates/video-note-template.md', '---\ntitle: "{{title}}"\nsource_url: {{source_url}}\n---\n\n# 自定义模板-{{title}}\n');
+        r9 = await run('场景9 自定义模板接线', 'https://example.com/watch?viewkey=CUSTOM1', '自定义模板测试');
+    }
+
+    // 场景10：Windows CRLF (\r\n) 换行的已有笔记读写兼容
+    vault.set('视频笔记/CRLF笔记.md', [
+        '---',
+        'title: "CRLF标题"',
+        'source_url: "https://example.com/watch?viewkey=CRLF1"',
+        'modified: 2026-11-01 00:00:00',
+        'date: 2026-11-01',
+        'edit_count: 2',
+        '---',
+        '',
+        '# CRLF标题',
+        '',
+    ].join('\r\n'));
+    gmStore.delete('obsidian_note_index_v4');
+    const r10 = await run('场景10 CRLF笔记读写兼容', 'https://example.com/watch?viewkey=CRLF1', 'CRLF标题');
+
     const paths = r => [...new Set(r.newWrites.map(w => w.path))];
     const r5Content = () => { const p = paths(r5)[0]; return p ? (vault.get(p) || '') : ''; };
-    const hasImgBed = source.includes('const ImgBed =');
+    const r7Content = () => { const p = paths(r7)[0]; return p ? (vault.get(p) || '') : ''; };
+    const r9Content = () => { const p = paths(r9)[0]; return p ? (vault.get(p) || '') : ''; };
     const A = 'https://example.com/watch?viewkey=AAA';
     const B = 'https://example.com/watch?viewkey=BBB';
+    const A6 = 'https://example.com/a?id=1';
+    const B6 = 'https://example.com/b?id=1';
+    const C6 = 'https://example.com/c?id=1';
 
     console.log('\n=== VAULT 最终状态（' + vault.size + ' 个文件）===');
     for (const [p, content] of vault) {
+        if (p.startsWith('视频笔记/占位-')) continue;
         console.log(p + ' => source_url=' + fm(content, 'source_url') + ' | title=' + fm(content, 'title') +
             ' | 截图块=' + (content.includes('data:image/jpeg;base64,') || content.includes('imgbed.example') ? '有' : '无'));
     }
@@ -236,6 +302,32 @@ async function run(label, href, title) {
             const p1 = paths(r1), p4 = paths(r4);
             return p4.length > 0 && p4.every(p => !p1.includes(p));
         }],
+        ['场景6 三方同参数多级去冲突互不覆盖', () => {
+            const p6a = paths(r6a)[0], p6b = paths(r6b)[0], p6c = paths(r6c)[0];
+            return p6a && p6b && p6c && new Set([p6a, p6b, p6c]).size === 3 &&
+                fm(vault.get(p6a), 'source_url') === A6 &&
+                fm(vault.get(p6b), 'source_url') === B6 &&
+                fm(vault.get(p6c), 'source_url') === C6;
+        }],
+        ['场景7 图床 HTTP 502 拒绝并回退 base64', () => !hasImgBed || (
+            !r7Content().includes('err-502.png') &&
+            /<img src="data:image\/jpeg;base64,[^"]+" width="400"/.test(r7Content())
+        )],
+        ['场景8 超过50篇笔记仍复用目标文件', () => {
+            const p8 = paths(r8);
+            return p8.length === 1 && p8[0] === '视频笔记/第六十一篇.md';
+        }],
+        ['场景9 v3 自定义模板接线生效', () => !hasCustomTmpl || (
+            r9Content().includes('# 自定义模板-自定义模板测试') &&
+            fm(r9Content(), 'source_url') === 'https://example.com/watch?viewkey=CUSTOM1'
+        )],
+        ['场景10 CRLF笔记复用且edit_count递增为3', () => {
+            const p10 = paths(r10);
+            const content = vault.get('视频笔记/CRLF笔记.md') || '';
+            const ecMatches = content.match(/^edit_count:/gm) || [];
+            return p10.length === 1 && p10[0] === '视频笔记/CRLF笔记.md' &&
+                fm(content, 'edit_count') === '3' && ecMatches.length === 1;
+        }],
         ['截图内容已写入笔记', () => [...vault.values()].some(c => c.includes('data:image/jpeg;base64,') || c.includes('imgbed.example'))],
         ['base64 截图用 <img> 内嵌', () => [...vault.values()].some(c => /<img src="data:image\/jpeg;base64,[^"]+" width="400"/.test(c))],
         ['图床外链沿用 ![alt|400](url) 语法', () => !hasImgBed || /!\[[^\]]*\|400\]\(https:\/\/imgbed\.example\/file\//.test(r5Content())],
@@ -252,5 +344,5 @@ async function run(label, href, title) {
     }
     if (runtimeErrors.length) console.log('\n运行期错误: ' + runtimeErrors.join(' | '));
     console.log('FAILED = ' + failed);
-    process.exit(0);
+    process.exit(failed > 0 ? 1 : 0);
 })();

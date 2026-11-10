@@ -183,7 +183,7 @@ tags: [视频笔记]
 
 模板的 frontmatter、正文块、URL 匹配器、页面采集器都定义在脚本内的 `TEMPLATE_TYPES`。
 
-> `loadObsidianTemplate()`（读取 `.obsidian/templates/*.md`）目前仍是**预留接口，尚未接线**；`templates/` 目录下的三个 `.md` 是示例文件，脚本暂不会读取它们。
+> 若 Vault 中存在 `.obsidian/templates/<type>-template.md`（如 `video-note-template.md`），脚本新建笔记时会优先读取并渲染该自定义模板（可参考仓库内 `templates/` 下的三个 `.md` 示例）；未配置时自动回退内置默认模板。
 
 ---
 
@@ -289,7 +289,7 @@ tags: [视频笔记]
 - [x] 2026-11-07 — 把 `master` 主分支切换到 3.x
 - [x] 2026-11-07 — 双条件笔记身份判定，修复不同查询参数被合并的问题
 - [ ] 把 `store.txt` 移出公开仓库（加入 `.gitignore`，仅本地保管）
-- [ ] 接线 `loadObsidianTemplate()`，让 `templates/*.md` 真正生效
+- [x] 接线 `loadObsidianTemplate()`，让 `.obsidian/templates/*.md` 自定义模板生效
 - [ ] 截图上传为 Obsidian 本地附件（REST API 二进制写入），替代外部图床
 - [ ] 批量截图模式
 - [ ] 三个脚本共用代码改为构建产物或 `@require`，避免重复维护

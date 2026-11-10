@@ -477,11 +477,12 @@
                 const src = v.currentSrc || v.src;
                 if (!src || /^blob:/i.test(src)) { resolve(null); return; }
                 const clone = document.createElement('video');
-                let done = false, timer = null;
+                let done = false, timer = null, seekTimer = null;
                 const finish = (val) => {
                     if (done) return;
                     done = true;
                     clearTimeout(timer);
+                    clearTimeout(seekTimer);
                     try { clone.removeAttribute('src'); clone.load(); } catch (e) { /* ignore */ }
                     resolve(val);
                 };
@@ -493,9 +494,11 @@
                 clone.addEventListener('error', () => finish(null));
                 clone.addEventListener('loadeddata', () => {
                     const grab = () => { try { finish(draw(clone)); } catch (e) { finish(null); } };
+                    const targetTime = v.currentTime || 0;
+                    if (targetTime < 0.1) { grab(); return; }
                     clone.addEventListener('seeked', grab, { once: true });
-                    try { clone.currentTime = v.currentTime || 0; } catch (e) { grab(); }
-                    setTimeout(grab, 900);
+                    try { clone.currentTime = targetTime; } catch (e) { grab(); return; }
+                    seekTimer = setTimeout(grab, 900);
                 }, { once: true });
                 clone.src = src;
                 clone.load();
@@ -637,6 +640,10 @@
                     data: fd,
                     timeout: 30000,
                     onload(res) {
+                        if (res.status < 200 || res.status >= 300) {
+                            reject(new Error('图床返回 HTTP ' + res.status));
+                            return;
+                        }
                         try {
                             const parsed = JSON.parse(res.responseText);
                             const item = Array.isArray(parsed) ? parsed[0] : (parsed.data || parsed);
@@ -819,14 +826,7 @@
         },
 
         /**
-         * 🔮 预留接口：从 Obsidian 读取自定义模板
-         *
-         * Obsidian 中模板文件路径约定：
-         *   Vault/.obsidian/templates/video-note-template.md
-         *   Vault/.obsidian/templates/reading-note-template.md
-         *   Vault/.obsidian/templates/resource-note-template.md
-         *
-         * 模板文件中用 {{field_name}} 占位符，脚本自动替换
+         * 从 Obsidian 读取自定义模板：Vault/.obsidian/templates/<typeId>-template.md
          */
         async loadObsidianTemplate(typeId) {
             const templatePath = '.obsidian/templates/' + typeId + '-template.md';
@@ -837,6 +837,58 @@
                 // 没有自定义模板，使用内置默认
                 return null;
             }
+        },
+
+        /**
+         * 渲染从 Obsidian 读取的自定义模板，并确保 frontmatter 中的 title / source_url 安全转义
+         */
+        renderCustomTemplate(rawTemplate, typeId, pageData, bodyVars = {}) {
+            const now = new Date();
+            const created = now.toISOString().replace('T', ' ').substring(0, 19);
+            const dateStr = now.toISOString().substring(0, 10);
+            const sourceUrl = pageData.sourceUrl || pageData.cleanUrl || pageData.pageURL || '';
+            const pageTitle = pageData.pageTitle || PageIdentity.currentTitle();
+            const bookTitle = pageData.bookTitle || bodyVars.book_title || pageTitle;
+
+            const allVars = Object.assign({
+                title: pageTitle,
+                book_title: bookTitle,
+                author: pageData.author || '',
+                source_url: sourceUrl,
+                source_name: pageData.source || '',
+                page_url: pageData.pageURL || sourceUrl,
+                reading_progress: pageData.progress || '',
+                resource_type: pageData.resourceType || '',
+                created: created,
+                modified: created,
+                date: dateStr,
+                edit_count: 1,
+            }, bodyVars);
+
+            const fmMatch = String(rawTemplate).match(/^(---\s*\r?\n)([\s\S]*?)(\r?\n---\s*(?:\r?\n|$))/);
+            if (!fmMatch) {
+                return this._renderTemplate(String(rawTemplate), allVars);
+            }
+
+            // frontmatter 内对 title / book_title / source_url 做 YAML 安全转义
+            let fmBody = fmMatch[2]
+                .replace(/"\{\{(title|book_title|source_url)\}\}"/g, (_, k) => {
+                    const val = k === 'source_url' ? sourceUrl : pageTitle;
+                    return PageIdentity.yamlQuote(val);
+                })
+                .replace(/\{\{(title|book_title|source_url)\}\}/g, (_, k) => {
+                    const val = k === 'source_url' ? sourceUrl : pageTitle;
+                    return PageIdentity.yamlQuote(val);
+                });
+            fmBody = this._renderTemplate(fmBody, allVars);
+
+            const rest = String(rawTemplate).slice(fmMatch[0].length);
+            const renderedBody = this._renderTemplate(rest, Object.assign({}, allVars, {
+                title: bodyVars.title || pageTitle,
+                book_title: bodyVars.book_title || bookTitle,
+            }));
+
+            return fmMatch[1] + fmBody + fmMatch[3] + renderedBody;
         },
 
         /**
@@ -963,11 +1015,12 @@
     }
 
     function getFrontmatterValue(content, key) {
-        const match = content.match(/^---\s*\n([\s\S]*?)\n---/);
+        const match = content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
         if (!match) return null;
-        const km = match[1].match(new RegExp('^' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':\\s*(.+)$', 'm'));
+        const km = match[1].match(new RegExp('^' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':\\s*(.*?)\\r?$', 'm'));
         if (!km) return null;
         let val = km[1].trim();
+        if (!val) return null;
         if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
             val = val.slice(1, -1);
         }
@@ -975,14 +1028,16 @@
     }
 
     function setFrontmatterValue(content, key, value) {
-        const match = content.match(/^---\s*\n([\s\S]*?)\n---/);
+        const match = content.match(/^(---\s*\r?\n)([\s\S]*?)(\r?\n---)/);
         if (!match) return content;
-        const fm = match[1];
-        const keyRegex = new RegExp('^' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':.*$', 'm');
-        if (fm.match(keyRegex)) {
-            return content.replace(fm, fm.replace(keyRegex, key + ': ' + value));
-        }
-        return content.replace(fm, fm + '\n' + key + ': ' + value);
+        const fm = match[2];
+        const lineEnding = match[3].startsWith('\r\n') ? '\r\n' : '\n';
+        const keyRegex = new RegExp('^' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':[^\\r\\n]*', 'm');
+        const replacementLine = key + ': ' + value;
+        const newFm = keyRegex.test(fm)
+            ? fm.replace(keyRegex, () => replacementLine)
+            : (fm ? fm + lineEnding + replacementLine : replacementLine);
+        return content.slice(0, match.index) + match[1] + newFm + match[3] + content.slice(match.index + match[0].length);
     }
 
     // ============================================================
@@ -1079,25 +1134,61 @@
         },
 
         /**
-         * 🔑 在目录中按「归一 URL + title」双条件搜索笔记
+         * 🔑 在目录中按「归一 URL + title」双条件搜索笔记（分批并发读取，避免大目录漏检）
          */
         async findNoteByIdentity(folderName, sourceUrl, pageTitle) {
             try {
                 const entries = await this.listVault(folderName);
                 if (!Array.isArray(entries)) return null;
                 const getName = x => (typeof x === 'string') ? x : (x.name || x.path || '');
-                const mdFiles = entries.filter(e => getName(e).toLowerCase().endsWith('.md')).slice(0, 50);
-                for (const f of mdFiles) {
-                    const fp = folderName + '/' + getName(f);
-                    try {
-                        const content = await this.readFile(fp);
-                        const fmUrl = getFrontmatterValue(content, 'source_url');
-                        const fmTitle = getFrontmatterValue(content, 'title');
-                        if (PageIdentity.matches(fmUrl, fmTitle, sourceUrl, pageTitle)) return fp;
-                    } catch (e) { continue; }
+                const mdFiles = entries.filter(e => getName(e).toLowerCase().endsWith('.md'));
+                const batchSize = 8;
+                for (let i = 0; i < mdFiles.length; i += batchSize) {
+                    const batch = mdFiles.slice(i, i + batchSize);
+                    const results = await Promise.all(batch.map(async f => {
+                        const fp = folderName + '/' + getName(f);
+                        try {
+                            const content = await this.readFile(fp);
+                            const fmUrl = getFrontmatterValue(content, 'source_url');
+                            const fmTitle = getFrontmatterValue(content, 'title');
+                            return PageIdentity.matches(fmUrl, fmTitle, sourceUrl, pageTitle) ? fp : null;
+                        } catch (e) { return null; }
+                    }));
+                    const hit = results.find(Boolean);
+                    if (hit) return hit;
                 }
                 return null;
             } catch (e) { return null; }
+        },
+
+        /**
+         * 解析新笔记目标路径：避免同名覆盖（含参数后缀仍冲突时的二级哈希与序号兜底）
+         */
+        async resolveNotePath(folderName, baseName, sourceUrl, pageTitle) {
+            const hash = PageIdentity.shortHash(PageIdentity.makeKey(sourceUrl, pageTitle));
+            const tag = PageIdentity.shortTag(sourceUrl, pageTitle);
+            const candidates = [
+                folderName + '/' + baseName + '.md',
+                folderName + '/' + baseName + '-' + tag + '.md',
+                folderName + '/' + baseName + '-' + hash + '.md',
+            ];
+            for (let i = 2; i <= 50; i++) {
+                candidates.push(folderName + '/' + baseName + '-' + hash + '-' + i + '.md');
+            }
+            const seen = new Set();
+            for (const candidate of candidates) {
+                if (seen.has(candidate)) continue;
+                seen.add(candidate);
+                try {
+                    const existing = await this.readFile(candidate);
+                    if (PageIdentity.matches(getFrontmatterValue(existing, 'source_url'), getFrontmatterValue(existing, 'title'), sourceUrl, pageTitle)) {
+                        return { filePath: candidate, existsMatch: true };
+                    }
+                } catch (e) {
+                    return { filePath: candidate, existsMatch: false };
+                }
+            }
+            return { filePath: folderName + '/' + baseName + '-' + hash + '-' + Date.now() + '.md', existsMatch: false };
         },
 
         async testConnection() {
@@ -1139,20 +1230,19 @@
                 return { filePath: foundPath, isNew: false, pageData, templateType: typeId };
             }
 
-            // Step 3: 创建新笔记
-            const noteName = (pageData.videoTitle || pageData.bookTitle || pageData.title || '未命名').replace(/[\\/:*?"<>|]/g, '-');
-            let filePath = folderName + '/' + noteName + '.md';
+            // Step 3: 创建新笔记（多级同名去冲突）
+            const noteName = (pageData.videoTitle || pageData.bookTitle || pageData.title || '未命名')
+                .replace(/[\\/:*?"<>|\r\n]/g, '-')
+                .replace(/[\s.]+$/g, '')
+                .trim() || '未命名';
+            const resolved = await ObsidianAPI.resolveNotePath(folderName, noteName, sourceUrl, pageTitle);
+            const filePath = resolved.filePath;
+            if (resolved.existsMatch) {
+                Config.setNoteByIdentity(identityKey, filePath, noteName, typeId);
+                return { filePath, isNew: false, pageData, templateType: typeId };
+            }
 
-            // 同名文件已存在但身份不同 → 追加可读后缀，避免覆盖其它 URL 的笔记
-            try {
-                const existing = await ObsidianAPI.readFile(filePath);
-                if (!PageIdentity.matches(getFrontmatterValue(existing, 'source_url'), getFrontmatterValue(existing, 'title'), sourceUrl, pageTitle)) {
-                    filePath = folderName + '/' + noteName + '-' + PageIdentity.shortTag(sourceUrl, pageTitle) + '.md';
-                }
-            } catch (e) { /* 目标文件不存在，直接使用 */ }
-
-            const frontmatter = TemplateManager.buildFrontmatter(typeId, pageData, { edit_count: 1 });
-            const header = TemplateManager.buildContentBlock(typeId, 'header', {
+            const bodyVars = {
                 title: noteName,
                 book_title: pageData.bookTitle || noteName,
                 author: pageData.author || '',
@@ -1162,9 +1252,14 @@
                 reading_progress: pageData.progress || '',
                 resource_type: pageData.resourceType || '',
                 created: new Date().toLocaleString('zh-CN'),
-            });
+            };
 
-            await ObsidianAPI.writeFile(filePath, frontmatter + '\n' + header);
+            const customTemplate = await TemplateManager.loadObsidianTemplate(typeId);
+            const noteContent = customTemplate
+                ? TemplateManager.renderCustomTemplate(customTemplate, typeId, pageData, bodyVars)
+                : (TemplateManager.buildFrontmatter(typeId, pageData, { edit_count: 1 }) + '\n' + TemplateManager.buildContentBlock(typeId, 'header', bodyVars));
+
+            await ObsidianAPI.writeFile(filePath, noteContent);
             Config.setNoteByIdentity(identityKey, filePath, noteName, typeId);
             return { filePath, isNew: true, pageData, templateType: typeId };
         },
@@ -1422,7 +1517,7 @@
                             '完全无法捕获时仍写入时间戳记录。',
                             createEl('br'),
                             createEl('br'),
-                            '注：Obsidian 自定义模板读取接口仍为预留，暂未启用。',
+                            '自定义模板：Vault/.obsidian/templates/<type>-template.md（未配置则用内置模板）。',
                         ]),
                     ]),
                     createEl('div', { className: SCRIPT_PREFIX + 'modal-footer' }, [
@@ -1574,9 +1669,9 @@
             if (!Config.isConfigured()) { UI.showToast('请先配置', 'warning'); UI.showSettings(); return; }
             UI.showLoading('正在创建...');
             try {
-                const { filePath } = await NoteManager.getOrCreateNote();
+                const { filePath, isNew } = await NoteManager.getOrCreateNote();
                 UI.hideLoading();
-                UI.showToast('✓ 笔记已创建: ' + filePath, 'success', 5000);
+                UI.showToast((isNew ? '✓ 笔记已创建: ' : '✓ 笔记已存在: ') + filePath, 'success', 5000);
             } catch (e) {
                 UI.hideLoading();
                 UI.showToast('失败: ' + e.message, 'error', 5000);

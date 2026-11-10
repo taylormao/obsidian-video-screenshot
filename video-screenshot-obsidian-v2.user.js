@@ -94,13 +94,14 @@
 
     /** 从 Markdown 内容中提取 YAML frontmatter 的某个字段 */
     function getFrontmatterValue(content, key) {
-        const match = content.match(/^---\s*\n([\s\S]*?)\n---/);
+        const match = content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
         if (!match) return null;
         const fm = match[1];
-        const keyRegex = new RegExp('^' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':\\s*(.+)$', 'm');
+        const keyRegex = new RegExp('^' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':\\s*(.*?)\\r?$', 'm');
         const km = fm.match(keyRegex);
         if (!km) return null;
         let val = km[1].trim();
+        if (!val) return null;
         // 去除引号
         if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
             val = val.slice(1, -1);
@@ -110,18 +111,16 @@
 
     /** 设置 YAML frontmatter 中的某个字段 */
     function setFrontmatterValue(content, key, value) {
-        const match = content.match(/^---\s*\n([\s\S]*?)\n---/);
+        const match = content.match(/^(---\s*\r?\n)([\s\S]*?)(\r?\n---)/);
         if (!match) return content;
-        const fm = match[1];
-        const keyRegex = new RegExp('^' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':.*$', 'm');
-        if (fm.match(keyRegex)) {
-            const newFm = fm.replace(keyRegex, key + ': ' + value);
-            return content.replace(fm, newFm);
-        } else {
-            // 插入到 frontmatter 末尾
-            const newFm = fm + '\n' + key + ': ' + value;
-            return content.replace(fm, newFm);
-        }
+        const fm = match[2];
+        const lineEnding = match[3].startsWith('\r\n') ? '\r\n' : '\n';
+        const keyRegex = new RegExp('^' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':[^\\r\\n]*', 'm');
+        const replacementLine = key + ': ' + value;
+        const newFm = keyRegex.test(fm)
+            ? fm.replace(keyRegex, () => replacementLine)
+            : (fm ? fm + lineEnding + replacementLine : replacementLine);
+        return content.slice(0, match.index) + match[1] + newFm + match[3] + content.slice(match.index + match[0].length);
     }
 
     // ============================================================
@@ -279,41 +278,67 @@
         },
 
         /**
-         * 🔑 在目录中按「归一 URL + title」双条件搜索笔记
-         * 通过逐个读取 .md 文件的 frontmatter 来匹配
+         * 🔑 在目录中按「归一 URL + title」双条件搜索笔记（分批并发读取，避免大目录漏检）
          */
         async findNoteByIdentity(folderName, sourceUrl, pageTitle) {
             try {
                 const entries = await this.listVault(folderName);
                 if (!Array.isArray(entries)) return null;
 
-                const mdFiles = entries.filter(e => {
-                    const name = (typeof e === 'string' ? e : (e.name || e.path || '')).toLowerCase();
-                    return name.endsWith('.md');
-                });
-
-                // 最多检查 50 个文件（避免性能问题）
-                const checkFiles = mdFiles.slice(0, 50);
-                for (const f of checkFiles) {
-                    const name = (typeof f === 'string') ? f : (f.name || f.path || '');
-                    const filePath = folderName + '/' + name;
-                    try {
-                        const content = await this.readFile(filePath);
-                        const fmSourceUrl = getFrontmatterValue(content, 'source_url');
-                        const fmTitle = getFrontmatterValue(content, 'title');
-                        if (PageIdentity.matches(fmSourceUrl, fmTitle, sourceUrl, pageTitle)) {
-                            return filePath;
+                const getName = e => (typeof e === 'string') ? e : (e.name || e.path || '');
+                const mdFiles = entries.filter(e => getName(e).toLowerCase().endsWith('.md'));
+                const batchSize = 8;
+                for (let i = 0; i < mdFiles.length; i += batchSize) {
+                    const batch = mdFiles.slice(i, i + batchSize);
+                    const results = await Promise.all(batch.map(async f => {
+                        const filePath = folderName + '/' + getName(f);
+                        try {
+                            const content = await this.readFile(filePath);
+                            const fmSourceUrl = getFrontmatterValue(content, 'source_url');
+                            const fmTitle = getFrontmatterValue(content, 'title');
+                            return PageIdentity.matches(fmSourceUrl, fmTitle, sourceUrl, pageTitle) ? filePath : null;
+                        } catch (e) {
+                            return null;
                         }
-                    } catch (e) {
-                        // 读文件失败，跳过
-                        continue;
-                    }
+                    }));
+                    const hit = results.find(Boolean);
+                    if (hit) return hit;
                 }
                 return null;
             } catch (e) {
                 console.error('[视频截图笔记] 搜索笔记失败:', e);
                 return null;
             }
+        },
+
+        /**
+         * 解析新笔记目标路径：避免同名覆盖（含参数后缀仍冲突时的二级哈希与序号兜底）
+         */
+        async resolveNotePath(folderName, baseName, sourceUrl, pageTitle) {
+            const hash = PageIdentity.shortHash(PageIdentity.makeKey(sourceUrl, pageTitle));
+            const tag = PageIdentity.shortTag(sourceUrl, pageTitle);
+            const candidates = [
+                folderName + '/' + baseName + '.md',
+                folderName + '/' + baseName + '-' + tag + '.md',
+                folderName + '/' + baseName + '-' + hash + '.md',
+            ];
+            for (let i = 2; i <= 50; i++) {
+                candidates.push(folderName + '/' + baseName + '-' + hash + '-' + i + '.md');
+            }
+            const seen = new Set();
+            for (const candidate of candidates) {
+                if (seen.has(candidate)) continue;
+                seen.add(candidate);
+                try {
+                    const existing = await this.readFile(candidate);
+                    if (PageIdentity.matches(getFrontmatterValue(existing, 'source_url'), getFrontmatterValue(existing, 'title'), sourceUrl, pageTitle)) {
+                        return { filePath: candidate, existsMatch: true };
+                    }
+                } catch (e) {
+                    return { filePath: candidate, existsMatch: false };
+                }
+            }
+            return { filePath: folderName + '/' + baseName + '-' + hash + '-' + Date.now() + '.md', existsMatch: false };
         },
     };
 
@@ -557,11 +582,12 @@
                 const src = v.currentSrc || v.src;
                 if (!src || /^blob:/i.test(src)) { resolve(null); return; }
                 const clone = document.createElement('video');
-                let done = false, timer = null;
+                let done = false, timer = null, seekTimer = null;
                 const finish = (val) => {
                     if (done) return;
                     done = true;
                     clearTimeout(timer);
+                    clearTimeout(seekTimer);
                     try { clone.removeAttribute('src'); clone.load(); } catch (e) { /* ignore */ }
                     resolve(val);
                 };
@@ -573,9 +599,11 @@
                 clone.addEventListener('error', () => finish(null));
                 clone.addEventListener('loadeddata', () => {
                     const grab = () => { try { finish(draw(clone)); } catch (e) { finish(null); } };
+                    const targetTime = v.currentTime || 0;
+                    if (targetTime < 0.1) { grab(); return; }
                     clone.addEventListener('seeked', grab, { once: true });
-                    try { clone.currentTime = v.currentTime || 0; } catch (e) { grab(); }
-                    setTimeout(grab, 900);
+                    try { clone.currentTime = targetTime; } catch (e) { grab(); return; }
+                    seekTimer = setTimeout(grab, 900);
                 }, { once: true });
                 clone.src = src;
                 clone.load();
@@ -738,16 +766,26 @@
         },
 
         getTimestampedURL(seconds) {
-            const url = new URL(this.getCurrentURL());
-            url.searchParams.set('t', Math.floor(seconds));
-            return url.href;
+            try {
+                const url = new URL(this.getCurrentURL());
+                url.hash = '';
+                if (typeof seconds === 'number' && isFinite(seconds) && seconds >= 0) {
+                    url.searchParams.set('t', Math.floor(seconds));
+                }
+                return url.href;
+            } catch (e) {
+                return this.getCurrentURL();
+            }
         },
 
         collect() {
             const currentTimeSeconds = VideoUtils.getCurrentTime();
             const pageURL = this.getCurrentURL();
             const cleanUrl = PageIdentity.currentUrl();
-            const videoTitle = this.getVideoTitle().replace(/[\\/:*?"<>|]/g, '-');
+            const videoTitle = this.getVideoTitle()
+                .replace(/[\\/:*?"<>|\r\n]/g, '-')
+                .replace(/[\s.]+$/g, '')
+                .trim() || '未知视频';
 
             return {
                 videoTitle: videoTitle,
@@ -865,14 +903,13 @@
             // 注意：不再按文件名/标题兜底复用，否则不同 URL 只要标题相同
             // 就会被错误地写进同一个 md 文件（身份判定统一由 PageIdentity 负责）
 
-            // Step 4: 创建新笔记
-            let filePath = folderName + '/' + meta.videoTitle + '.md';
-            try {
-                const existing = await ObsidianAPI.readFile(filePath);
-                if (!PageIdentity.matches(getFrontmatterValue(existing, 'source_url'), getFrontmatterValue(existing, 'title'), sourceUrl, pageTitle)) {
-                    filePath = folderName + '/' + meta.videoTitle + '-' + PageIdentity.shortTag(sourceUrl, pageTitle) + '.md';
-                }
-            } catch (e) { /* 目标文件不存在，直接使用 */ }
+            // Step 4: 创建新笔记（多级同名去冲突）
+            const resolved = await ObsidianAPI.resolveNotePath(folderName, meta.videoTitle, sourceUrl, pageTitle);
+            const filePath = resolved.filePath;
+            if (resolved.existsMatch) {
+                Config.setNoteByIdentity(identityKey, filePath, meta.videoTitle);
+                return { filePath: filePath, isNew: false, meta: meta };
+            }
 
             const header = NoteTemplate.buildHeader(meta);
             await ObsidianAPI.writeFile(filePath, header);
@@ -943,13 +980,12 @@
                 throw new Error('该视频笔记已存在：' + foundPath);
             }
 
-            let filePath = folderName + '/' + meta.videoTitle + '.md';
-            try {
-                const existing = await ObsidianAPI.readFile(filePath);
-                if (!PageIdentity.matches(getFrontmatterValue(existing, 'source_url'), getFrontmatterValue(existing, 'title'), sourceUrl, pageTitle)) {
-                    filePath = folderName + '/' + meta.videoTitle + '-' + PageIdentity.shortTag(sourceUrl, pageTitle) + '.md';
-                }
-            } catch (e) { /* 目标文件不存在，直接使用 */ }
+            const resolved = await ObsidianAPI.resolveNotePath(folderName, meta.videoTitle, sourceUrl, pageTitle);
+            if (resolved.existsMatch) {
+                Config.setNoteByIdentity(identityKey, resolved.filePath, meta.videoTitle);
+                throw new Error('该视频笔记已存在：' + resolved.filePath);
+            }
+            const filePath = resolved.filePath;
 
             const header = NoteTemplate.buildHeader(meta);
             await ObsidianAPI.writeFile(filePath, header);
